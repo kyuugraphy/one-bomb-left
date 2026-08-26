@@ -68,6 +68,23 @@ const PICKUP_SIZE = 24
 const PICKUP_REWARD_COLOR = 0x22d3ee
 const PICKUP_CURSED_COLOR = 0xa855f7
 const PICKUP_TREASURE_COLOR = 0xfbbf24
+
+// ===== DEBUG / TEMPORARY - remove before shipping ==========================
+// G force-spawns a reward pickup next to the player so duplicate-item behaviour can be
+// tested without waiting on random rolls: walk onto it once to take it, again to see the
+// 'already owned' path. Tracked in the cleanup TODO in zz_status.md.
+const DEBUG_SPAWN_KEY = true
+const DEBUG_SPAWN_ITEM_ID = 'iron_plating'
+const DEBUG_SPAWN_OFFSET = 84
+
+if (DEBUG_SPAWN_KEY) {
+  console.warn(
+    '[one-bomb-left] DEBUG: key G force-spawns a ' +
+      DEBUG_SPAWN_ITEM_ID +
+      ' pickup. Temporary - see the cleanup TODO in zz_status.md.'
+  )
+}
+// ===== end DEBUG ============================================================
 const CURSED_CHANCE = 0.5
 const PANIC_RADIUS = 240
 const PANIC_DAMAGE = 3
@@ -176,6 +193,11 @@ export class PlayScene extends Phaser.Scene {
       this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
       this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.THREE)
     ]
+
+    // DEBUG / TEMPORARY - see DEBUG_SPAWN_KEY above.
+    if (DEBUG_SPAWN_KEY) {
+      this.debugSpawnKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G)
+    }
   }
 
   buildWalls(width, height) {
@@ -468,6 +490,11 @@ export class PlayScene extends Phaser.Scene {
     this.updateFiring(time)
     this.updateActives(time)
     this.refreshItemHud(time)
+
+    // DEBUG / TEMPORARY - see DEBUG_SPAWN_KEY above.
+    if (DEBUG_SPAWN_KEY && Phaser.Input.Keyboard.JustDown(this.debugSpawnKey)) {
+      this.debugSpawnItemPickup()
+    }
   }
 
   updateMovement(time) {
@@ -938,6 +965,44 @@ export class PlayScene extends Phaser.Scene {
 
 
   // ---- pickups -------------------------------------------------------------
+
+  // ===== DEBUG / TEMPORARY - remove with DEBUG_SPAWN_KEY ====================
+  // Drops a clean reward pickup one step from the player, far enough that it is not taken
+  // the instant it appears. Goes through the ordinary reward path, so the duplicate case
+  // exercises takeReward's 'owned' short-circuit exactly as a real drop would.
+  debugSpawnItemPickup() {
+    const item = getItem(DEBUG_SPAWN_ITEM_ID)
+    const spot = this.debugFreeSpotNearPlayer()
+
+    this.addPickup(spot.x, spot.y, {
+      kind: 'reward',
+      item,
+      isCursed: false,
+      color: PICKUP_REWARD_COLOR
+    })
+
+    this.toast(`DEBUG: spawned ${item.name}`, '#fbbf24')
+    console.warn('[one-bomb-left] DEBUG spawned', item.id, 'at', Math.round(spot.x), Math.round(spot.y))
+  }
+
+  debugFreeSpotNearPlayer() {
+    const angles = [0, 90, 180, 270, 45, 135, 225, 315]
+
+    for (const degrees of angles) {
+      const radians = Phaser.Math.DegToRad(degrees)
+      const x = this.player.x + Math.cos(radians) * DEBUG_SPAWN_OFFSET
+      const y = this.player.y + Math.sin(radians) * DEBUG_SPAWN_OFFSET
+      const [row, col] = this.cellAt(x, y)
+
+      if (!this.blocked[row][col]) {
+        return new Phaser.Math.Vector2(x, y)
+      }
+    }
+
+    // boxed in - drop it underfoot and let it be taken immediately
+    return new Phaser.Math.Vector2(this.player.x, this.player.y)
+  }
+  // ===== end DEBUG ==========================================================
 
   spawnRewardPickup(x, y) {
     const pool = itemsFrom('reward')
