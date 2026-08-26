@@ -96,4 +96,46 @@ describe('takeReward with an item attached', () => {
 
     expect(gameState.inventory.passives).toEqual([null, null, null, null])
   })
+
+  // An item the player already holds is not a reward: nothing is placed, so nothing is
+  // collected and no curse is paid for it.
+  describe('a reward carrying an item the player already holds', () => {
+    test('reports owned and adds no duplicate', () => {
+      const gameState = itemState()
+      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+
+      const result = takeReward(
+        gameState,
+        { isCursed: false, item: getItem('iron_plating') },
+        () => 0.9
+      )
+
+      expect(result).toEqual({ success: false, reason: 'owned' })
+      expect(gameState.inventory.passives.map((item) => item && item.id)).toEqual([
+        'iron_plating',
+        null,
+        null,
+        null
+      ])
+    })
+
+    test('does not count toward rewardsCollected', () => {
+      const gameState = itemState()
+      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+
+      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+
+      expect(gameState.rewardsCollected).toBe(1)
+    })
+
+    test('pays no curse even when the pickup was cursed', () => {
+      const gameState = itemState()
+      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+
+      takeReward(gameState, { isCursed: true, item: getItem('iron_plating') }, () => 0.9)
+
+      expect(gameState.enemyStrength).toBe(0)
+      expect(gameState.riskLevel).toBe(0)
+    })
+  })
 })

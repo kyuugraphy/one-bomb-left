@@ -991,12 +991,25 @@ export class PlayScene extends Phaser.Scene {
   // reward is shown in purple and the only way to skip one is to walk around it.
   onPickup(player, pickup) {
     const { kind, item, isCursed } = pickup.spec
-    pickup.destroy()
 
     const result =
       kind === 'treasure'
         ? grantItem(this.gameState, item)
         : takeReward(this.gameState, { isCursed, item }, Math.random)
+
+    // Already held: nothing was placed and no curse was paid, so the pickup is left in
+    // the room rather than eaten for nothing - swap something out and it can be taken.
+    // The overlap re-fires every frame while standing on it, so announce it just once.
+    if (result && result.reason === 'owned') {
+      if (!pickup.spec.announcedOwned) {
+        pickup.spec.announcedOwned = true
+        this.toast(`${item.name} - already owned`, '#94a3b8')
+        console.log('[one-bomb-left] already owned, left in the room:', item.id)
+      }
+      return
+    }
+
+    pickup.destroy()
 
     if (result && !result.success) {
       // Prompt 3 turns this into the real swap UI.

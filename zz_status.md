@@ -30,13 +30,13 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 - Combat: bullet→enemy overlap deals 1 dmg, flash tween on hit, destroy at 0 HP. Enemy HP = 3 + `enemyStrength`.
 - Player damage: enemy touch → knockback (420 px/s, 180 ms) + 600 ms i-frames, `Hits taken` counter on screen.
 
-### Pure logic modules (tested, 66/66 passing)
+### Pure logic modules (tested, 78/78 passing)
 | Module | Exports | State touched |
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
 | `curses.js` | `applyCurse('risk' \| 'enemy')` | `riskLevel`, `enemyStrength` |
 | `rewards.js` | `takeReward`, `skipReward` | `rewardsCollected`, + curse on 50/50 roll |
-| `inventory.js` | `createInventory`, `addPassive`, `addActive`, `swapPassive`, `swapActive`, `hasSetBonus` | its own `{ passives[4], actives[3] }` object |
+| `inventory.js` | `createInventory`, `addPassive`, `addActive`, `swapPassive`, `swapActive`, `hasItem`, `hasSetBonus` | its own `{ passives[4], actives[3] }` object |
 | `items.js` | `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
 | `effects.js` | `computeStats(base, inventory)` | none - returns a fresh stats object |
 | `actives.js` | `triggerActive`, `cooldownRemaining` | `cooldowns` map |
@@ -59,12 +59,17 @@ Each item carries the display strings **and** the numbers `computeStats` reads, 
 | `panic_button` | Panic Button | active | reward | damage + shove enemies in radius | `cooldown: 12000` |
 | `second_wind` | Second Wind | active | reward | heal 1 HP | `cooldown: 30000` |
 
+**Items are unique — one copy each, passives *and* actives.** `hasItem(inventory, id)` searches both racks and `grantItem` checks it **before** the rack has room, returning `{ success: false, reason: 'owned' }` and mutating nothing. A duplicate passive would stack numerically (two Iron Platings read as +2 max HP); a duplicate active would be dead weight, because `cooldowns` is keyed by **item id**, so both copies would share one timer - one rule covers both racks, and no new active item can accidentally become a "double charge" later. `'owned'` deliberately outranks `'full'`: there is no new item to place, so it must not raise the swap prompt.
+
+An already-owned reward **costs nothing**: `takeReward` short-circuits before touching `rewardsCollected` and before the curse roll, so walking over a duplicate cursed pickup is not a punishment. And the pickup is **left in the room** rather than eaten - swap the item out and it can still be taken. Since the overlap re-fires every frame while standing on it, `pickup.spec.announcedOwned` keeps the toast to one per pickup.
+
 **Set bonus:** `iron_plating` + `steady_boots` → **+5% damage**. `computeStats(BASE_STATS, inventory)` recomputes every stat from scratch on each inventory change, so breaking the set drops the bonus with no unwind code. Verified live: swapping `steady_boots` out took damage 1.05 → 1 and move speed 368 → 320 in the same frame.
 
 **Actives** cool down in a `{ itemId: readyAtMs }` map on `gameState`, never on the item objects (those are shared module constants). Each item runs its own clock — measured 12.0 s and 30.0 s ticking side by side.
 
 ### Pickups + scene wiring (`PlayScene.js`)
 - **Treasure pickup** (gold) spawns on room entry at a free cell ≥ 260 px from the player. Always `steady_boots`, always curse-free, granted with `grantItem` — it does **not** count toward `rewardsCollected`.
+- **Duplicates are refused.** Touching a pickup for an item already in the rack is a no-op: no stat change, no `rewardsCollected`, no curse, no swap prompt, and the pickup stays on the floor with a one-off `already owned` toast.
 - **Reward pickup** drops where an enemy dies, rolled from the four reward-sourced items, **50% cursed**. Cursed ones render purple, clean ones cyan. Goes through `takeReward`, so `rewardsCollected` and the existing curse roll still apply — and `enemyStrength` from the 'enemy' curse now actually reaches `enemyHpFor`.
 - Touching a pickup takes it. With no take/skip UI yet, **the only way to skip a cursed reward is to walk around it** — that is what the purple tint is for.
 - **Full rack does not auto-add.** `addPassive`'s `{ success: false, reason: 'full' }` reaches `onPickup`, which `console.log`s it and shows a `(swap prompt TODO)` toast. Verified: the item was not added and no stat moved.
@@ -75,7 +80,7 @@ Each item carries the display strings **and** the numbers `computeStats` reads, 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 8 files, 66 tests, green.
+- `npx vitest run` → 8 files, 78 tests, green.
 
 ## Not done / known gaps
 - **No real `gameState`.** Bombs, curses, and rewards are unit-tested in isolation and never called from `PlayScene`. `this.enemyStrength = 0` is a hardcoded stand-in.

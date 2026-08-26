@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest'
-import { addActive, addPassive, createInventory, hasSetBonus, swapActive, swapPassive } from './inventory.js'
+import {
+  addActive,
+  addPassive,
+  createInventory,
+  hasItem,
+  hasSetBonus,
+  swapActive,
+  swapPassive
+} from './inventory.js'
+import { getItem } from './items.js'
 
 describe('createInventory', () => {
   test('a new inventory has 4 empty passive slots', () => {
@@ -180,5 +189,41 @@ describe('hasSetBonus', () => {
     inventory.actives = [{ id: 'boots' }, null, null]
 
     expect(hasSetBonus(inventory, 'thorns', 'boots')).toBe(false)
+  })
+})
+
+describe('hasItem', () => {
+  test('an empty inventory holds nothing', () => {
+    expect(hasItem(createInventory(), 'iron_plating')).toBe(false)
+  })
+
+  test('a passive in the rack is held', () => {
+    const inventory = createInventory()
+    addPassive(inventory, getItem('iron_plating'))
+
+    expect(hasItem(inventory, 'iron_plating')).toBe(true)
+  })
+
+  test('an active in the rack is held', () => {
+    const inventory = createInventory()
+    addActive(inventory, getItem('panic_button'))
+
+    expect(hasItem(inventory, 'panic_button')).toBe(true)
+  })
+
+  test('an item the player does not carry is not held', () => {
+    const inventory = createInventory()
+    addPassive(inventory, getItem('iron_plating'))
+
+    expect(hasItem(inventory, 'steady_boots')).toBe(false)
+  })
+
+  test('an item swapped out is no longer held', () => {
+    const inventory = createInventory()
+    addPassive(inventory, getItem('iron_plating'))
+    swapPassive(inventory, 0, getItem('steady_boots'))
+
+    expect(hasItem(inventory, 'iron_plating')).toBe(false)
+    expect(hasItem(inventory, 'steady_boots')).toBe(true)
   })
 })

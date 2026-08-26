@@ -38,3 +38,11 @@ export function hasSetBonus(inventory, itemIdA, itemIdB) {
   const ids = inventory.passives.filter(Boolean).map((item) => item.id)
   return ids.includes(itemIdA) && ids.includes(itemIdB)
 }
+
+// Both racks are searched: an id lives in one or the other, never both, and every item
+// in the game is unique to the player who holds it.
+export function hasItem(inventory, itemId) {
+  return [...inventory.passives, ...inventory.actives].some(
+    (item) => item !== null && item.id === itemId
+  )
+}
