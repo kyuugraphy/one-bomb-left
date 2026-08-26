@@ -25,7 +25,6 @@ const ENEMY_MUZZLE_OFFSET = ENEMY_SIZE / 2 + ENEMY_SHOT_RADIUS
 const KNOCKBACK_SPEED = 420
 const KNOCKBACK_DURATION = 180
 const HIT_COOLDOWN = 600
-const WALL_THICKNESS = 24
 const WALL_COLOR = 0x4b5563
 const DOORWAY_WIDTH = 140
 const DOORWAY_MARGIN = 40
@@ -46,6 +45,12 @@ const BAR_EDGE_COLOR = 0x565f72
 const DETOUR_CLEARANCE = 8
 const PATH_LOOKAHEAD = 6
 const CELL = 56
+// The wall bodies fill the grid's whole blocked border ring rather than sitting a thin
+// strip inside it. Physics and pathing then agree on exactly which cells are solid: with
+// a 24 px wall the leftover 32 px of the border cell was a corridor the 32 px player fit
+// into and the 36 px enemy did not, so a rock in the next cell in made an invincibility
+// pocket - unreachable on foot and, often enough, out of the enemy's shot line too.
+const WALL_THICKNESS = CELL
 const COVERAGE_TARGET = 1 / 4
 const ROCK_AREA_SHARE = 0.6
 const NEAR_WALL_SHARE = 2 / 3

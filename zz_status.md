@@ -13,7 +13,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, 1200 ms lifetime.
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
-- Room walls: 5 static rectangles (24 px, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`.
+- Room walls: 5 static rectangles (**56 px = one full grid cell**, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`. `WALL_THICKNESS = CELL` is deliberate, not a magic number: the wall bodies fill exactly the border ring the grid marks blocked, so physics and pathing agree on which cells are solid (see the wall-pocket fix below).
 - Obstacles are generated on a **56 px grid** (24x15 cells), filling **1/4 of the interior** every load:
   | | shape | size roll | color | on foot | bullets |
   |---|---|---|---|---|---|
@@ -85,11 +85,28 @@ Each item carries the display strings **and** the numbers `computeStats` reads, 
 - **The +5% set bonus is currently invisible in play**: bullets do 1 damage into 10 enemy HP, and `ceil(10 / 1.05)` is still 10 bullets. It is applied and testable, but it will not change a fight until damage or enemy HP scales.
 - Only one enemy ever spawns; no waves, no respawn, no difficulty ramp. Room is cleared for good once it dies.
 - Pathing is BFS on a coarse 56 px grid, so routes are cell-accurate rather than pixel-optimal.
-- **Wall-pocket safe spot.** The border ring is one 56 px cell wide but the walls are only 24 px thick, so a 32 px walkable slot runs right around the room inside the wall. The 36 px enemy does not fit in it. When an obstacle fills the cell next to that slot, the player can stand in the pocket and the enemy can only press against the obstacle ~90-146 px away - measured over 20 fresh layouts, roughly a third of wall positions are such a pocket, and in 2 of 4 sampled the rock also broke the shot line, so the player was **completely untouchable**. Fixes to weigh: make the wall bodies fill the whole border cell (grid and physics then agree, at the cost of playable area), or reserve the ring next to the wall band so nothing can seal a pocket.
 - Coverage is a target, not a guarantee: the generator stops early if 600 placement attempts run out, though in sampling it always landed within a point of the target.
 - Pits are solid underfoot — nothing falls in, they just block movement while bullets pass over.
 - No sound, no art (everything is a colored rectangle), no menu.
 - Playwright is a dependency with zero tests.
+
+## Wall-pocket invincibility spot — FIXED
+Symptom: standing against a wall with a rock in the next cell in, the enemy could neither reach the player nor, about half the time, shoot it.
+
+Cause: the grid's border ring is one 56 px cell wide but the wall bodies were only 24 px thick, leaving a **32 px corridor around the whole room that the grid calls blocked and the 32 px player fits into exactly**. The enemy body (36 px) physically fits there too, but pathing only ever routes to open-cell centres, so it would not follow - a rock in the adjacent cell left it pressing 90-146 px away.
+
+Fix: `WALL_THICKNESS = CELL`, so the wall bodies fill the whole blocked border ring and the corridor stops existing. Expressed as `= CELL` rather than `56` to keep the invariant visible; the constant had to move below `CELL` to avoid a TDZ error. Cost is a band of playable area on each side - interior is now 1232x728 - and the HUD insets (`WALL_THICKNESS + 12`) moved in with it.
+
+Verified in Chrome on the dev server (a temporary `window.__game = ...` in `src/main.js` for the scripted runs, removed again afterwards):
+- **The structural invariant now holds**: sampling the whole room on a 4 px lattice across 10 fresh layouts, **every position the 32 px player can legally stand maps to an open grid cell** - zero exceptions outside the doorway. Before the fix that band was the exploit.
+- **16/16 wall-hug chases reach contact** (player pressed to each of the four walls at the closest legal offset, enemy spawned at the furthest free cell, up to 16.3 s). The same test was 9/12 before.
+- Flood fill still holds: 213-215 open cells per layout, **0 unreachable** from the doorway cell and **0 too tight for a 36 px enemy**, across 10 layouts. The grid itself did not change - the ring was already marked blocked - so generation and coverage are untouched.
+- Doorway unaffected: spawn point standable and the straight walk-up to past the entry line clear in all 10 layouts.
+- `npx vitest run` 66/66, `npm run build` clean.
+
+_Measurement note:_ the first metric tried - "any spot where the 32 px body fits but the 36 px body does not" - was the wrong layer and reported **zero for the old geometry too**. The old pocket was pathing-unreachable, not body-unreachable: with a 24 px wall the enemy body fits from x=42, it just refuses to path into a blocked cell. Restricting the enemy's reachable set to open-cell centres is what makes the metric see the bug.
+
+_Still true, by design:_ the 140 px doorway channel sits in a blocked grid row, so it is another spot the player can stand where pathing will not go. It is **not** a safe spot - of four positions tested, three are reached on foot and the fourth (deep in the left shoulder, 56 px out) has a clear shot line on **299/299** frames, so the enemy just shoots it. The walk-in stretch above it is reserved from obstacles, so nothing can seal it either.
 
 ## Enemy-stalling bug — FIXED
 Symptom: with the player across a rock or pit, the enemy would stop and wait instead of routing around.
