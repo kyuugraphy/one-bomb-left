@@ -30,7 +30,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 - Combat: bullet→enemy overlap deals 1 dmg, flash tween on hit, destroy at 0 HP. Enemy HP = 3 + `enemyStrength`.
 - Player damage: enemy touch → knockback (420 px/s, 180 ms) + 600 ms i-frames, `Hits taken` counter on screen.
 
-### Pure logic modules (tested, 78/78 passing)
+### Pure logic modules (tested, 94/94 passing)
 | Module | Exports | State touched |
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
@@ -41,6 +41,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `effects.js` | `computeStats(base, inventory)` | none - returns a fresh stats object |
 | `actives.js` | `triggerActive`, `cooldownRemaining` | `cooldowns` map |
 | `grant.js` | `grantItem` | `inventory` |
+| `swap.js` | `needsSwapPrompt`, `swapOptions`, `applySwap` | `inventory` (via the swap it routes) |
 
 `inventory.js` is built TDD, one red-green cycle per function:
 - **4 passive slots, 3 active slots**, empty is `null`.
@@ -72,20 +73,31 @@ An already-owned reward **costs nothing**: `takeReward` short-circuits before to
 - **Duplicates are refused.** Touching a pickup for an item already in the rack is a no-op: no stat change, no `rewardsCollected`, no curse, no swap prompt, and the pickup stays on the floor with a one-off `already owned` toast.
 - **Reward pickup** drops where an enemy dies, rolled from the four reward-sourced items, **50% cursed**. Cursed ones render purple, clean ones cyan. Goes through `takeReward`, so `rewardsCollected` and the existing curse roll still apply — and `enemyStrength` from the 'enemy' curse now actually reaches `enemyHpFor`.
 - Touching a pickup takes it. With no take/skip UI yet, **the only way to skip a cursed reward is to walk around it** — that is what the purple tint is for.
-- **Full rack does not auto-add.** `addPassive`'s `{ success: false, reason: 'full' }` reaches `onPickup`, which `console.log`s it and shows a `(swap prompt TODO)` toast. Verified: the item was not added and no stat moved.
+- **Full rack raises the swap prompt** rather than auto-adding or eating the item; see the Inventory UI section.
 - **Keys `1` / `2` / `3` fire active slots 1-3.** WASD moves and the arrows aim, so the number row is what scales to three slots — and it leaves `SPACE` free for the bomb button.
 - Panic button: 240 px radius, 3 damage, 560 px/s shove held for 260 ms via `enemy.pushedUntil` (which `updateEnemies` honours, or the chase steer would cancel the shove on the next frame), and it clears enemy shots in the air.
 - The health bar is **rebuilt**, not resized, when Iron Plating changes `maxHp` — 6 segments → 7, and the extra max HP is handed over as real HP.
-- A monospace readout top-right lists passives, actives with live cooldowns, and the set-bonus line. **This is a debug readout, not the real slot UI.**
+### Inventory UI (`PlayScene.js`)
+**Persistent slot HUD**, top-right: a row of 4 passive boxes over a row of 3 active ones, each 54 px with a short abbreviation of the item name (`Iron Plating` -> `IP`), derived at render time so a new item needs no extra data. Empty slots are darker, dim-bordered and hold a `.`; filled ones are lighter with a brighter border. The active row carries `1` `2` `3` key hints beneath it and the set-bonus line sits under that. The whole block gets its own **dark backing panel** - dim slate text over a light rock or wall band was unreadable, and the HUD floats over the room.
+
+**Active cooldown state** is readable at a glance: ready means a **green border**, cooling means a slate border, the abbreviation dimmed to 50%, a dark veil filling the box from the bottom in proportion to the time left, and the seconds remaining printed across it. Measured mid-cooldown: veil at 0.70/0.73 of the box with `8.4s` and `22.0s` showing, and each item on its own clock.
+
+**Swap prompt.** A full rack **pauses the game** - `physics.pause()`, so nothing moves, shoots or lands a hit until the player has chosen. That was picked over slowing time because the choice reads five lines of item text; a timer would make it a reflex test. The panel shows the incoming item with its effect (and `(CURSED)` in purple when it is), then one numbered line per slot with what is currently in it, then the way out.
+
+- **Input is the number row again**, `1`-`4` for passives and `1`-`3` for actives, with **`ESC`** to back out. Numbers because `1`/`2`/`3` already mean "active slot n" in play, so "number = slot" is one idea rather than two; the prompt literally reuses those three `Key` objects and adds a fourth. `JustDown` is consumed by whichever handler reads it first and `updateActives` never runs while the prompt is open, so confirming a swap cannot also fire an active.
+- **On confirm** the displaced item **drops back on the floor** as a `dropped` pickup 84 px away, rather than vanishing. Nothing else in this game silently destroys an item, it keeps a snap decision reversible, and it makes "walk back for it" a real choice later. Dropped pickups route through `grantItem`, not `takeReward`, so re-taking your own gear is never cursed and never counts as a reward.
+- **On decline** nothing at all changes and the pickup stays where it is. To make that literally true, `takeReward` no longer charges for a reward it could not place: the `rewardsCollected` count and the curse roll moved into a new `collectReward`, which the scene calls only once the item is actually placed. Before this, declining still cost a curse.
+- A declined pickup - and one just dropped underfoot - is **inert until the player steps more than 78 px away**, so the prompt cannot re-open while standing on it and a swap cannot be undone by not moving.
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 8 files, 78 tests, green.
+- `npx vitest run` → 9 files, 94 tests, green.
 
 ## Not done / known gaps
 - **No real `gameState`.** Bombs, curses, and rewards are unit-tested in isolation and never called from `PlayScene`. `this.enemyStrength = 0` is a hardcoded stand-in.
 - **No bombs in-game** — despite the project name. No bomb input, no AoE, no bomb HUD. `bombs.js` is still unwired; `1`/`2`/`3` are actives and `SPACE` is deliberately left free for it.
 - **No take/skip choice UI** — touching a reward pickup takes it. Cursed rewards are only avoidable by not walking into them.
+- **The swap prompt cannot trigger in normal play yet.** Items are unique and the catalogue is smaller than the racks: 3 passives for 4 slots, 2 actives for 3. So a rack can never actually fill, and every duplicate takes the `already owned` path instead. The UI is built and verified with filler items, but it stays dead until there are **4+ passives or 3+ actives**. That is the strongest argument for growing the catalogue next.
 - **No swap prompt** — a full rack logs to the console and drops the item on the floor conceptually (the pickup is consumed and the item is lost). That is the next thing to build.
 - **The +5% set bonus is currently invisible in play**: bullets do 1 damage into 10 enemy HP, and `ceil(10 / 1.05)` is still 10 bullets. It is applied and testable, but it will not change a fight until damage or enemy HP scales.
 - Only one enemy ever spawns; no waves, no respawn, no difficulty ramp. Room is cleared for good once it dies.
@@ -145,6 +157,6 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [ ] Implement the bomb: input binding, AoE clear, HUD count, refill-on-kill hook.
 - [x] ~~feed `enemyStrength` back into `enemyHpFor`~~ — done, via cursed reward pickups.
 - [ ] Reward pickups with take/skip choice (the pickup exists; the choice UI does not).
-- [ ] Inventory UI: 4+3 slot HUD replacing the text readout, swap prompt on a `{ success: false, reason: 'full' }` add, "you dropped X" line from the item `swapPassive`/`swapActive` returns.
+- [x] ~~Inventory UI: 4+3 slot HUD, swap prompt, "you dropped X"~~ — done; the prompt needs more items before it can fire in play.
 - [ ] More items — the catalogue is 5 deep and `treasure` has exactly one entry, so the chest is not a roll yet.
 - [ ] Enemy waves and multiple rooms (death/restart is done).

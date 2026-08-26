@@ -4,7 +4,8 @@ import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
 import { createInventory } from './inventory.js'
 import { getItem, itemsFrom } from './items.js'
-import { takeReward } from './rewards.js'
+import { collectReward, takeReward } from './rewards.js'
+import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 
 const PLAYER_SPEED = 320
 const PLAYER_SIZE = 32
@@ -68,6 +69,32 @@ const PICKUP_SIZE = 24
 const PICKUP_REWARD_COLOR = 0x22d3ee
 const PICKUP_CURSED_COLOR = 0xa855f7
 const PICKUP_TREASURE_COLOR = 0xfbbf24
+const PICKUP_DROPPED_COLOR = 0x94a3b8
+const DROP_OFFSET = 84
+// A declined or just-dropped pickup stays inert until the player is this far from it, so
+// the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
+const PICKUP_REARM_DISTANCE = 78
+
+const SLOT_SIZE = 54
+const SLOT_GAP = 7
+const SLOT_EMPTY_FILL = 0x161b26
+const SLOT_EMPTY_EDGE = 0x39414f
+const SLOT_FILLED_FILL = 0x2b3444
+const SLOT_FILLED_EDGE = 0x8792a6
+const SLOT_READY_EDGE = 0xa3e635
+const SLOT_VEIL_COLOR = 0x05070c
+const HUD_DEPTH = 20
+const PROMPT_DEPTH = 100
+const SWAP_PANEL_WIDTH = 620
+
+// Two initials read better than a truncated name in a 54 px box: Iron Plating -> IP.
+const abbreviate = (name) =>
+  name
+    .split(' ')
+    .map((word) => word[0])
+    .join('')
+    .slice(0, 3)
+    .toUpperCase()
 const CURSED_CHANCE = 0.5
 const PANIC_RADIUS = 240
 const PANIC_DAMAGE = 3
@@ -176,6 +203,16 @@ export class PlayScene extends Phaser.Scene {
       this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TWO),
       this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.THREE)
     ]
+
+    // The swap prompt reuses those three Key objects and adds a fourth, so a number means
+    // "slot n" everywhere. JustDown is consumed by whichever handler reads it first, and
+    // updateActives never runs while the prompt is open, so the two cannot both fire.
+    this.slotKeys = [
+      ...this.activeKeys,
+      this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR)
+    ]
+    this.escKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
+    this.swap = null
   }
 
   buildWalls(width, height) {
@@ -462,11 +499,20 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    // The prompt owns the moment: physics is paused, so nothing moves, shoots or is hit
+    // until the player has chosen. Only the HUD keeps painting.
+    if (this.swap) {
+      this.updateSwapPrompt()
+      this.refreshItemHud(time)
+      return
+    }
+
     this.checkRoomEntry()
     this.updateMovement(time)
     this.updateEnemies(time)
     this.updateFiring(time)
     this.updateActives(time)
+    this.updatePickupRearm()
     this.refreshItemHud(time)
   }
 
@@ -939,6 +985,56 @@ export class PlayScene extends Phaser.Scene {
 
   // ---- pickups -------------------------------------------------------------
 
+  updatePickupRearm() {
+    this.pickups.getChildren().forEach((pickup) => {
+      if (!pickup.spec.declined) {
+        return
+      }
+
+      const distance = Phaser.Math.Distance.Between(
+        this.player.x,
+        this.player.y,
+        pickup.x,
+        pickup.y
+      )
+
+      if (distance > PICKUP_REARM_DISTANCE) {
+        pickup.spec.declined = false
+      }
+    })
+  }
+
+  // A displaced item lands back on the floor rather than vanishing: nothing else in this
+  // game silently destroys an item, and it keeps a snap decision reversible. It starts
+  // inert so it is not re-taken from under the player's feet on the next frame.
+  dropItem(item) {
+    const spot = this.freeSpotNear(this.player.x, this.player.y)
+
+    this.addPickup(spot.x, spot.y, {
+      kind: 'dropped',
+      item,
+      isCursed: false,
+      color: PICKUP_DROPPED_COLOR,
+      declined: true
+    })
+  }
+
+  freeSpotNear(x, y) {
+    for (const degrees of [0, 90, 180, 270, 45, 135, 225, 315]) {
+      const radians = Phaser.Math.DegToRad(degrees)
+      const spotX = x + Math.cos(radians) * DROP_OFFSET
+      const spotY = y + Math.sin(radians) * DROP_OFFSET
+      const [row, col] = this.cellAt(spotX, spotY)
+
+      if (!this.blocked[row][col]) {
+        return new Phaser.Math.Vector2(spotX, spotY)
+      }
+    }
+
+    // boxed in - drop it underfoot, the re-arm distance still keeps it inert for a step
+    return new Phaser.Math.Vector2(x, y)
+  }
+
   spawnRewardPickup(x, y) {
     const pool = itemsFrom('reward')
     const item = Phaser.Utils.Array.GetRandom(pool)
@@ -990,12 +1086,19 @@ export class PlayScene extends Phaser.Scene {
   // Touching a pickup takes it - the take/skip choice is still to come, so a cursed
   // reward is shown in purple and the only way to skip one is to walk around it.
   onPickup(player, pickup) {
+    // declined pickups and items just dropped underfoot stay inert until stepped off
+    if (this.swap || pickup.spec.declined) {
+      return
+    }
+
     const { kind, item, isCursed } = pickup.spec
 
+    // only a reward carries a curse and counts toward rewardsCollected; treasure and
+    // items the player dropped themselves go straight into the rack
     const result =
-      kind === 'treasure'
-        ? grantItem(this.gameState, item)
-        : takeReward(this.gameState, { isCursed, item }, Math.random)
+      kind === 'reward'
+        ? takeReward(this.gameState, { isCursed, item }, Math.random)
+        : grantItem(this.gameState, item)
 
     // Already held: nothing was placed and no curse was paid, so the pickup is left in
     // the room rather than eaten for nothing - swap something out and it can be taken.
@@ -1009,15 +1112,14 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
-    pickup.destroy()
-
-    if (result && !result.success) {
-      // Prompt 3 turns this into the real swap UI.
-      console.log('[one-bomb-left] rack full, needs swap prompt:', item.id, result)
-      this.toast(`${item.name} - ${item.slot}s full (swap prompt TODO)`, '#fbbf24')
+    // A full rack is a choice, not a loss: the pickup stays in the room until the player
+    // either picks a slot or backs out.
+    if (needsSwapPrompt(result)) {
+      this.openSwapPrompt(item, pickup)
       return
     }
 
+    pickup.destroy()
     this.refreshStats()
 
     const curseNote = isCursed ? ' (CURSED)' : ''
@@ -1120,40 +1222,278 @@ export class PlayScene extends Phaser.Scene {
     this.refreshHealthBar()
   }
 
-  // ---- item readout --------------------------------------------------------
+  // ---- item slots ----------------------------------------------------------
 
-  // A plain text readout, not the real slot UI - just enough to see the wiring work.
+  // 4 passive boxes over 3 active ones, top-right. Everything is a rectangle plus a
+  // short abbreviation - no art yet, but enough to read what is equipped, in which slot,
+  // and whether an active is ready.
   buildItemHud() {
-    this.itemHud = this.add
-      .text(this.scale.width - WALL_THICKNESS - 12, WALL_THICKNESS + 12, '', {
+    const right = this.scale.width - WALL_THICKNESS - 12
+    const top = WALL_THICKNESS + 12
+
+    const passivesLabelY = top
+    const passiveRowY = top + 20 + SLOT_SIZE / 2
+    const activesLabelY = top + 20 + SLOT_SIZE + 18
+    const activeRowY = activesLabelY + 20 + SLOT_SIZE / 2
+    const setY = activeRowY + SLOT_SIZE / 2 + 24
+
+    // The HUD floats over the room, and dim slate on a light rock or wall band is
+    // unreadable - so it gets its own dark backing rather than relying on what is behind.
+    const rowWidth = 4 * SLOT_SIZE + 3 * SLOT_GAP
+    const padding = 12
+    const backingTop = passivesLabelY - padding
+    const backingBottom = setY + 20
+
+    this.add
+      .rectangle(
+        right - rowWidth / 2,
+        (backingTop + backingBottom) / 2,
+        rowWidth + padding * 2,
+        backingBottom - backingTop,
+        0x0b0e14,
+        0.85
+      )
+      .setDepth(HUD_DEPTH - 1)
+
+    const label = (x, y, text) =>
+      this.add
+        .text(x, y, text, { fontFamily: 'monospace', fontSize: '13px', color: '#94a3b8' })
+        .setOrigin(1, 0)
+        .setDepth(HUD_DEPTH)
+
+    label(right, passivesLabelY, 'PASSIVES')
+    this.hudPassiveSlots = this.buildSlotRow(right, passiveRowY, 4, false)
+
+    label(right, activesLabelY, 'ACTIVES')
+    this.hudActiveSlots = this.buildSlotRow(right, activeRowY, 3, true)
+
+    this.hudSetText = this.add
+      .text(right, setY, '', {
         fontFamily: 'monospace',
-        fontSize: '15px',
-        color: '#cbd5e1',
-        align: 'right'
+        fontSize: '13px',
+        color: '#a3e635'
       })
       .setOrigin(1, 0)
+      .setDepth(HUD_DEPTH)
+  }
+
+  buildSlotRow(right, centreY, count, withKeyHints) {
+    const slots = []
+
+    for (let index = 0; index < count; index++) {
+      const x = right - (count - 1 - index) * (SLOT_SIZE + SLOT_GAP) - SLOT_SIZE / 2
+
+      const box = this.add
+        .rectangle(x, centreY, SLOT_SIZE, SLOT_SIZE, SLOT_EMPTY_FILL)
+        .setDepth(HUD_DEPTH)
+      box.setStrokeStyle(2, SLOT_EMPTY_EDGE)
+
+      // drawn from the bottom edge up, then scaled to whatever is left of the cooldown
+      const veil = this.add
+        .rectangle(
+          x,
+          centreY + SLOT_SIZE / 2 - 1,
+          SLOT_SIZE - 4,
+          SLOT_SIZE - 4,
+          SLOT_VEIL_COLOR,
+          0.74
+        )
+        .setOrigin(0.5, 1)
+        .setDepth(HUD_DEPTH + 1)
+      veil.setScale(1, 0)
+
+      const text = this.add
+        .text(x, centreY - 4, '.', {
+          fontFamily: 'monospace',
+          fontSize: '19px',
+          color: '#64748b'
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH + 2)
+
+      const timer = this.add
+        .text(x, centreY + SLOT_SIZE / 2 - 4, '', {
+          fontFamily: 'monospace',
+          fontSize: '11px',
+          color: '#e2e8f0'
+        })
+        .setOrigin(0.5, 1)
+        .setDepth(HUD_DEPTH + 2)
+
+      if (withKeyHints) {
+        this.add
+          .text(x, centreY + SLOT_SIZE / 2 + 4, String(index + 1), {
+            fontFamily: 'monospace',
+            fontSize: '12px',
+            color: '#64748b'
+          })
+          .setOrigin(0.5, 0)
+          .setDepth(HUD_DEPTH)
+      }
+
+      slots.push({ box, veil, text, timer })
+    }
+
+    return slots
   }
 
   refreshItemHud(time) {
     const { inventory, cooldowns } = this.gameState
 
-    const passives = inventory.passives
-      .map((item, i) => `${i + 1}. ${item ? item.name : '-'}`)
-      .join('\n')
+    inventory.passives.forEach((item, index) => this.paintSlot(this.hudPassiveSlots[index], item))
 
-    const actives = inventory.actives
-      .map((item, i) => {
-        if (!item) {
-          return `[${i + 1}] -`
-        }
-        const left = cooldownRemaining(item, time, cooldowns)
-        return `[${i + 1}] ${item.name} ${left > 0 ? `${(left / 1000).toFixed(1)}s` : 'READY'}`
+    inventory.actives.forEach((item, index) => {
+      const slot = this.hudActiveSlots[index]
+      this.paintSlot(slot, item)
+
+      if (!item) {
+        return
+      }
+
+      // dimmed and veiled while cooling, green-edged the moment it is usable again
+      const left = cooldownRemaining(item, time, cooldowns)
+      const cooling = left > 0
+
+      slot.veil.setScale(1, cooling ? left / item.cooldown : 0)
+      slot.timer.setText(cooling ? (left / 1000).toFixed(1) + 's' : '')
+      slot.text.setAlpha(cooling ? 0.5 : 1)
+      slot.box.setStrokeStyle(2, cooling ? SLOT_FILLED_EDGE : SLOT_READY_EDGE)
+    })
+
+    this.hudSetText.setText(this.stats.damage > 1 ? 'SET  +5% dmg' : '')
+  }
+
+  paintSlot(slot, item) {
+    slot.text.setText(item ? abbreviate(item.name) : '.')
+    slot.text.setColor(item ? '#e2e8f0' : '#64748b')
+    slot.text.setAlpha(1)
+    slot.box.setFillStyle(item ? SLOT_FILLED_FILL : SLOT_EMPTY_FILL)
+    slot.box.setStrokeStyle(2, item ? SLOT_FILLED_EDGE : SLOT_EMPTY_EDGE)
+
+    if (!item) {
+      slot.veil.setScale(1, 0)
+      slot.timer.setText('')
+    }
+  }
+
+  // ---- swap prompt ---------------------------------------------------------
+
+  openSwapPrompt(item, pickup) {
+    const { rack, slots } = swapOptions(this.gameState.inventory, item)
+    const { width, height } = this.scale
+
+    this.player.body.setVelocity(0, 0)
+    this.physics.pause()
+    this.swap = { item, pickup, count: slots.length, objects: [] }
+
+    const cursed = pickup.spec.isCursed
+    const rows = [
+      {
+        text: (rack === 'actives' ? 'ACTIVE' : 'PASSIVE') + ' SLOTS FULL',
+        size: 25,
+        color: '#fbbf24',
+        gap: 44
+      },
+      { text: item.name, size: 22, color: cursed ? '#c084fc' : '#67e8f9', gap: 27 },
+      {
+        text: item.effect + (cursed ? '   (CURSED)' : ''),
+        size: 15,
+        color: '#cbd5e1',
+        gap: 42
+      },
+      { text: 'replace which slot?', size: 15, color: '#94a3b8', gap: 32 }
+    ]
+
+    slots.forEach((held, index) => {
+      rows.push({
+        text:
+          '[' +
+          (index + 1) +
+          ']   ' +
+          (held ? held.name + '  -  ' + held.effect : '(empty)'),
+        size: 17,
+        color: '#e2e8f0',
+        gap: 30
       })
-      .join('\n')
+    })
 
-    const set = this.stats.damage > 1 ? '\nSET BONUS: +5% dmg' : ''
+    rows.push({ text: '[ESC]   leave it on the floor', size: 15, color: '#94a3b8', gap: 0 })
 
-    this.itemHud.setText(`PASSIVES\n${passives}\n\nACTIVES\n${actives}${set}`)
+    const panelHeight = rows.reduce((total, row) => total + row.gap, 0) + 74
+
+    const veil = this.add
+      .rectangle(width / 2, height / 2, width, height, 0x05070c, 0.74)
+      .setDepth(PROMPT_DEPTH)
+    const panel = this.add
+      .rectangle(width / 2, height / 2, SWAP_PANEL_WIDTH, panelHeight, 0x111725)
+      .setDepth(PROMPT_DEPTH + 1)
+    panel.setStrokeStyle(2, 0x8792a6)
+    this.swap.objects.push(veil, panel)
+
+    let y = height / 2 - panelHeight / 2 + 34
+
+    rows.forEach((row) => {
+      this.swap.objects.push(
+        this.add
+          .text(width / 2, y, row.text, {
+            fontFamily: 'monospace',
+            fontSize: row.size + 'px',
+            color: row.color
+          })
+          .setOrigin(0.5)
+          .setDepth(PROMPT_DEPTH + 2)
+      )
+      y += row.gap
+    })
+  }
+
+  updateSwapPrompt() {
+    for (let index = 0; index < this.swap.count; index++) {
+      if (Phaser.Input.Keyboard.JustDown(this.slotKeys[index])) {
+        this.confirmSwap(index)
+        return
+      }
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+      this.declineSwap()
+    }
+  }
+
+  confirmSwap(slotIndex) {
+    const { item, pickup } = this.swap
+    const { kind, isCursed } = pickup.spec
+    const displaced = applySwap(this.gameState, item, slotIndex)
+
+    // the reward is only charged for now that the item is actually placed
+    if (kind === 'reward') {
+      collectReward(this.gameState, { isCursed }, Math.random)
+    }
+
+    pickup.destroy()
+    this.closeSwapPrompt()
+    this.refreshStats()
+
+    if (displaced) {
+      this.dropItem(displaced)
+    }
+
+    const dropNote = displaced ? ' - dropped ' + displaced.name : ''
+    this.toast('slot ' + (slotIndex + 1) + ': ' + item.name + dropNote, isCursed ? '#c084fc' : '#67e8f9')
+  }
+
+  declineSwap() {
+    const { item, pickup } = this.swap
+
+    pickup.spec.declined = true
+    this.closeSwapPrompt()
+    this.toast('left ' + item.name + ' on the floor', '#94a3b8')
+  }
+
+  closeSwapPrompt() {
+    this.swap.objects.forEach((object) => object.destroy())
+    this.swap = null
+    this.physics.resume()
   }
 
   toast(message, color) {

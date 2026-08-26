@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { createInventory } from './inventory.js'
 import { getItem } from './items.js'
-import { skipReward, takeReward } from './rewards.js'
+import { collectReward, skipReward, takeReward } from './rewards.js'
 
 const freshState = () => ({ riskLevel: 0, enemyStrength: 0, rewardsCollected: 0 })
 
@@ -136,6 +136,54 @@ describe('takeReward with an item attached', () => {
 
       expect(gameState.enemyStrength).toBe(0)
       expect(gameState.riskLevel).toBe(0)
+    })
+  })
+
+  // The rack being full means the player has a choice to make, so nothing is charged for
+  // it yet - declining the swap prompt has to cost nothing at all. The scene calls
+  // collectReward once the item is actually placed.
+  describe('a reward that cannot be placed yet', () => {
+    test('a full rack collects nothing and pays no curse', () => {
+      const gameState = itemState()
+      gameState.inventory.passives = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+
+      const result = takeReward(
+        gameState,
+        { isCursed: true, item: getItem('iron_plating') },
+        () => 0.1
+      )
+
+      expect(result).toEqual({ success: false, reason: 'full' })
+      expect(gameState.rewardsCollected).toBe(0)
+      expect(gameState.riskLevel).toBe(0)
+      expect(gameState.enemyStrength).toBe(0)
+    })
+  })
+
+  describe('collectReward', () => {
+    test('collecting counts the reward', () => {
+      const gameState = itemState()
+
+      collectReward(gameState, { isCursed: false }, () => 0.1)
+
+      expect(gameState.rewardsCollected).toBe(1)
+    })
+
+    test('collecting a cursed reward pays the curse', () => {
+      const gameState = itemState()
+
+      collectReward(gameState, { isCursed: true }, () => 0.9)
+
+      expect(gameState.enemyStrength).toBe(1)
+    })
+
+    test('collecting a clean reward pays no curse', () => {
+      const gameState = itemState()
+
+      collectReward(gameState, { isCursed: false }, () => 0.1)
+
+      expect(gameState.riskLevel).toBe(0)
+      expect(gameState.enemyStrength).toBe(0)
     })
   })
 })
