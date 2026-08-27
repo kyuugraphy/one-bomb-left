@@ -111,12 +111,12 @@ Slots are 40 px boxes holding a short abbreviation of the item name (`Iron Plati
 - `npx vitest run` → 9 files, 97 tests, green.
 
 ## Not done / known gaps
-- **No real `gameState`.** Bombs, curses, and rewards are unit-tested in isolation and never called from `PlayScene`. `this.enemyStrength = 0` is a hardcoded stand-in.
+- **`bombs.js` is the last unwired module.** Everything else reaches the scene through `gameState`: curses arrive via cursed reward pickups and `enemyStrength` really does feed `enemyHpFor`.
 - **No bombs in-game** — despite the project name. No bomb input, no AoE, no bomb HUD. `bombs.js` is still unwired; `1`/`2`/`3` are actives and `SPACE` is deliberately left free for it.
 - **No take/skip choice UI** — touching a reward pickup takes it. Cursed rewards are only avoidable by not walking into them.
-- **No swap prompt** — a full rack logs to the console and drops the item on the floor conceptually (the pickup is consumed and the item is lost). That is the next thing to build.
-- **The +5% set bonus is currently invisible in play**: bullets do 1 damage into 10 enemy HP, and `ceil(10 / 1.05)` is still 10 bullets. It is applied and testable, but it will not change a fight until damage or enemy HP scales.
+- **The +5% set bonus is still invisible in play.** Even with Sharp Rounds the arithmetic swallows it: `ceil(10 / 1.5)` and `ceil(10 / 1.575)` are both 7 bullets. Applied and tested, but it changes no fight until enemy HP or damage scales.
 - Only one enemy ever spawns; no waves, no respawn, no difficulty ramp. Room is cleared for good once it dies.
+- **The inventory loop cannot be reached by playing.** A room yields one enemy drop plus one treasure, and `R` restart calls `freshGameState()`, which wipes the rack. Two items per room with a reset on restart means 4 passive slots never fill, so the swap prompt, the floor drop and re-taking a dropped item are all unreachable in normal play. Waves, or an inventory that survives a room change, is what unblocks it.
 - Pathing is BFS on a coarse 56 px grid, so routes are cell-accurate rather than pixel-optimal.
 - Coverage is a target, not a guarantee: the generator stops early if 600 placement attempts run out, though in sampling it always landed within a point of the target.
 - Pits are solid underfoot — nothing falls in, they just block movement while bullets pass over.
@@ -175,5 +175,5 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [ ] Reward pickups with take/skip choice (the pickup exists; the choice UI does not).
 - [x] ~~Inventory UI: 4+3 slot HUD, swap prompt, "you dropped X"~~ — done; the prompt needs more items before it can fire in play.
 - [x] ~~More items~~ — 10 items now (6 passives, 4 actives), both racks fillable, treasure is a 2-way roll.
-- [ ] Still only one **set bonus**, and it stays nearly invisible in play: Sharp Rounds plus the set gives 1.575 damage into 10 enemy HP, so `ceil(10/1.5)` and `ceil(10/1.575)` are both 7 bullets. Needs enemy HP or damage to scale before the +5% reads as anything.
+- [ ] Scale enemy HP or damage so the **set bonus** stops being invisible, and add a second set worth chasing.
 - [ ] Enemy waves and multiple rooms (death/restart is done).
