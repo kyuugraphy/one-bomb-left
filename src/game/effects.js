@@ -15,6 +15,8 @@ export function computeStats(base, inventory) {
     maxHp: base.maxHp + sum('maxHpBonus'),
     fireCooldown: base.fireCooldown + sum('fireCooldownBonus'),
     moveSpeed: base.moveSpeed * product('moveSpeedMultiplier'),
-    damage: base.damage * (hasSetBonus(inventory, setA, setB) ? SET_BONUS.damageMultiplier : 1)
+    damage:
+      (base.damage + sum('damageBonus')) *
+      (hasSetBonus(inventory, setA, setB) ? SET_BONUS.damageMultiplier : 1)
   }
 }

@@ -3,7 +3,7 @@ import { cooldownRemaining, triggerActive } from './actives.js'
 import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
 import { createInventory } from './inventory.js'
-import { getItem, itemsFrom } from './items.js'
+import { itemsFrom } from './items.js'
 import { collectReward, takeReward } from './rewards.js'
 import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 
@@ -75,8 +75,9 @@ const DROP_OFFSET = 84
 // the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
 const PICKUP_REARM_DISTANCE = 78
 
-const SLOT_SIZE = 54
-const SLOT_GAP = 7
+const SLOT_SIZE = 40
+const SLOT_GAP = 6
+const HUD_EDGE_MARGIN = 14
 const SLOT_EMPTY_FILL = 0x161b26
 const SLOT_EMPTY_EDGE = 0x39414f
 const SLOT_FILLED_FILL = 0x2b3444
@@ -85,22 +86,25 @@ const SLOT_READY_EDGE = 0xa3e635
 const SLOT_VEIL_COLOR = 0x05070c
 const HUD_DEPTH = 20
 const PROMPT_DEPTH = 100
-const SWAP_PANEL_WIDTH = 620
+const SWAP_PANEL_WIDTH = 700
 
-// Two initials read better than a truncated name in a 54 px box: Iron Plating -> IP.
-const abbreviate = (name) =>
-  name
-    .split(' ')
-    .map((word) => word[0])
-    .join('')
-    .slice(0, 3)
-    .toUpperCase()
+// Initials read better than a truncated name in a 40 px box: Iron Plating -> IP. A
+// single-word name has no initials to take, so it keeps its first two letters instead of
+// shrinking to one lonely character: Bulwark -> BU.
+const abbreviate = (name) => {
+  const words = name.split(' ')
+  const initials = words.length > 1 ? words.map((word) => word[0]).join('') : name.slice(0, 2)
+
+  return initials.slice(0, 3).toUpperCase()
+}
 const CURSED_CHANCE = 0.5
 const PANIC_RADIUS = 240
 const PANIC_DAMAGE = 3
 const PANIC_PUSH_SPEED = 560
 const PANIC_PUSH_DURATION = 260
 const SECOND_WIND_HEAL = 1
+const REPAIR_KIT_HEAL = 2
+const BULWARK_DURATION = 2500
 const TOAST_LIFETIME = 2800
 
 // right, down, left, up - growNoodle turns by rotating this index
@@ -514,6 +518,14 @@ export class PlayScene extends Phaser.Scene {
     this.updateActives(time)
     this.updatePickupRearm()
     this.refreshItemHud(time)
+
+    if (this.bulwarkRing) {
+      if (this.bulwarkRing.active) {
+        this.bulwarkRing.setPosition(this.player.x, this.player.y)
+      } else {
+        this.bulwarkRing = null
+      }
+    }
   }
 
   updateMovement(time) {
@@ -912,8 +924,11 @@ export class PlayScene extends Phaser.Scene {
     ;(this.hpNodes ?? []).forEach((node) => node.destroy())
 
     const maxHp = this.stats.maxHp
-    const left = WALL_THICKNESS + 12
-    const top = WALL_THICKNESS + 12
+
+    // The bar rides the top wall band rather than the room, so it hides no floor, rock or
+    // pit. The band is WALL_THICKNESS tall and the bar is centred in it.
+    const left = HUD_EDGE_MARGIN
+    const top = (WALL_THICKNESS - (HP_SEGMENT_HEIGHT + BAR_PADDING * 2)) / 2
 
     // Walk the layout once to measure it - a closed form stops being obvious the moment
     // maxHp can be odd.
@@ -960,6 +975,7 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0, 0)
 
     this.hpNodes = [track, ...this.hpSegments, this.hpLabel]
+    this.hpNodes.forEach((node) => node.setDepth(HUD_DEPTH))
 
     this.refreshHealthBar()
   }
@@ -1048,13 +1064,13 @@ export class PlayScene extends Phaser.Scene {
     })
   }
 
-  // One treasure item exists, so the chest is not a roll yet. Never cursed.
+  // Rolled from the treasure pool, never cursed.
   spawnTreasurePickup() {
     const spot = this.pickSpawnPoint()
 
     this.addPickup(spot.x, spot.y, {
       kind: 'treasure',
-      item: getItem('steady_boots'),
+      item: Phaser.Utils.Array.GetRandom(itemsFrom('treasure')),
       isCursed: false,
       color: PICKUP_TREASURE_COLOR
     })
@@ -1169,7 +1185,13 @@ export class PlayScene extends Phaser.Scene {
       this.usePanicButton()
     }
     if (item.id === 'second_wind') {
-      this.useSecondWind()
+      this.healPlayer(SECOND_WIND_HEAL)
+    }
+    if (item.id === 'repair_kit') {
+      this.healPlayer(REPAIR_KIT_HEAL)
+    }
+    if (item.id === 'bulwark') {
+      this.useBulwark()
     }
 
     this.toast(`${item.name}!`, '#a3e635')
@@ -1213,8 +1235,24 @@ export class PlayScene extends Phaser.Scene {
     this.enemyShots.getChildren().slice().forEach((shot) => shot.destroy())
   }
 
-  useSecondWind() {
-    this.healPlayer(SECOND_WIND_HEAL)
+  // Rides the existing i-frame window rather than adding a second kind of invulnerability:
+  // takeHit already refuses everything until nextHitAt, so pushing it out is the whole
+  // effect. A ring shows how long is left.
+  useBulwark() {
+    this.nextHitAt = Math.max(this.nextHitAt, this.time.now + BULWARK_DURATION)
+
+    const ring = this.add.circle(this.player.x, this.player.y, PLAYER_SIZE, 0x60a5fa, 0.28)
+    ring.setStrokeStyle(2, 0x93c5fd)
+
+    this.tweens.add({
+      targets: ring,
+      alpha: 0,
+      duration: BULWARK_DURATION,
+      onComplete: () => ring.destroy()
+    })
+
+    // the shield travels with the player for as long as it lasts
+    this.bulwarkRing = ring
   }
 
   healPlayer(amount) {
@@ -1228,56 +1266,68 @@ export class PlayScene extends Phaser.Scene {
   // short abbreviation - no art yet, but enough to read what is equipped, in which slot,
   // and whether an active is ready.
   buildItemHud() {
-    const right = this.scale.width - WALL_THICKNESS - 12
-    const top = WALL_THICKNESS + 12
+    const { width, height } = this.scale
 
-    const passivesLabelY = top
-    const passiveRowY = top + 20 + SLOT_SIZE / 2
-    const activesLabelY = top + 20 + SLOT_SIZE + 18
-    const activeRowY = activesLabelY + 20 + SLOT_SIZE / 2
-    const setY = activeRowY + SLOT_SIZE / 2 + 24
+    // Both rows live in the bottom wall band, split around the doorway gap: passives to
+    // the left of it, actives to the right. Nothing here covers a walkable tile.
+    const keyHintY = height - WALL_THICKNESS + 2
+    const rowY = height - WALL_THICKNESS + 16 + SLOT_SIZE / 2
+    const doorwayStart = (width - DOORWAY_WIDTH) / 2
 
-    // The HUD floats over the room, and dim slate on a light rock or wall band is
-    // unreadable - so it gets its own dark backing rather than relying on what is behind.
-    const rowWidth = 4 * SLOT_SIZE + 3 * SLOT_GAP
-    const padding = 12
-    const backingTop = passivesLabelY - padding
-    const backingBottom = setY + 20
-
-    this.add
-      .rectangle(
-        right - rowWidth / 2,
-        (backingTop + backingBottom) / 2,
-        rowWidth + padding * 2,
-        backingBottom - backingTop,
-        0x0b0e14,
-        0.85
-      )
-      .setDepth(HUD_DEPTH - 1)
-
-    const label = (x, y, text) =>
+    const label = (x, y, text, origin) =>
       this.add
-        .text(x, y, text, { fontFamily: 'monospace', fontSize: '13px', color: '#94a3b8' })
-        .setOrigin(1, 0)
+        .text(x, y, text, { fontFamily: 'monospace', fontSize: '12px', color: '#cbd5e1' })
+        .setOrigin(origin, 0.5)
         .setDepth(HUD_DEPTH)
 
-    label(right, passivesLabelY, 'PASSIVES')
-    this.hudPassiveSlots = this.buildSlotRow(right, passiveRowY, 4, false)
+    // The wall is a light slate, so each group gets a dark plate behind it - the boxes
+    // and their dim labels are unreadable straight on the wall colour.
+    const plate = (left, right) =>
+      this.add
+        .rectangle(
+          (left + right) / 2,
+          height - WALL_THICKNESS / 2,
+          right - left,
+          WALL_THICKNESS - 6,
+          0x0b0e14,
+          0.88
+        )
+        .setDepth(HUD_DEPTH - 1)
 
-    label(right, activesLabelY, 'ACTIVES')
-    this.hudActiveSlots = this.buildSlotRow(right, activeRowY, 3, true)
+    const passiveRowWidth = 4 * SLOT_SIZE + 3 * SLOT_GAP
+    const passiveLeft = HUD_EDGE_MARGIN + 74
+    plate(HUD_EDGE_MARGIN - 6, passiveLeft + passiveRowWidth + 8)
+    label(HUD_EDGE_MARGIN, rowY, 'PASSIVES', 0)
+    this.hudPassiveSlots = this.buildSlotRow(
+      passiveLeft + passiveRowWidth,
+      rowY,
+      keyHintY,
+      4,
+      false
+    )
 
+    const activeRowWidth = 3 * SLOT_SIZE + 2 * SLOT_GAP
+    const activeRight = width - HUD_EDGE_MARGIN - 66
+    plate(activeRight - activeRowWidth - 8, width - HUD_EDGE_MARGIN + 6)
+    label(width - HUD_EDGE_MARGIN, rowY, 'ACTIVES', 1)
+    this.hudActiveSlots = this.buildSlotRow(activeRight, rowY, keyHintY, 3, true)
+
+    // Status text goes in the top band beside the hearts, where there is room to spare.
     this.hudSetText = this.add
-      .text(right, setY, '', {
+      .text(width - HUD_EDGE_MARGIN, WALL_THICKNESS / 2, '', {
         fontFamily: 'monospace',
-        fontSize: '13px',
+        fontSize: '14px',
         color: '#a3e635'
       })
-      .setOrigin(1, 0)
+      .setOrigin(1, 0.5)
       .setDepth(HUD_DEPTH)
+
+    if (passiveLeft + passiveRowWidth + 8 > doorwayStart) {
+      console.warn('[one-bomb-left] item HUD overruns the doorway gap')
+    }
   }
 
-  buildSlotRow(right, centreY, count, withKeyHints) {
+  buildSlotRow(right, centreY, keyHintY, count, withKeyHints) {
     const slots = []
 
     for (let index = 0; index < count; index++) {
@@ -1303,29 +1353,30 @@ export class PlayScene extends Phaser.Scene {
       veil.setScale(1, 0)
 
       const text = this.add
-        .text(x, centreY - 4, '.', {
+        .text(x, centreY - 5, '.', {
           fontFamily: 'monospace',
-          fontSize: '19px',
+          fontSize: '17px',
           color: '#64748b'
         })
         .setOrigin(0.5)
         .setDepth(HUD_DEPTH + 2)
 
       const timer = this.add
-        .text(x, centreY + SLOT_SIZE / 2 - 4, '', {
+        .text(x, centreY + SLOT_SIZE / 2 - 3, '', {
           fontFamily: 'monospace',
-          fontSize: '11px',
+          fontSize: '10px',
           color: '#e2e8f0'
         })
         .setOrigin(0.5, 1)
         .setDepth(HUD_DEPTH + 2)
 
+      // the key that fires this slot, on its own line above the boxes
       if (withKeyHints) {
         this.add
-          .text(x, centreY + SLOT_SIZE / 2 + 4, String(index + 1), {
+          .text(x, keyHintY, String(index + 1), {
             fontFamily: 'monospace',
-            fontSize: '12px',
-            color: '#64748b'
+            fontSize: '11px',
+            color: '#94a3b8'
           })
           .setOrigin(0.5, 0)
           .setDepth(HUD_DEPTH)
@@ -1413,7 +1464,10 @@ export class PlayScene extends Phaser.Scene {
           (held ? held.name + '  -  ' + held.effect : '(empty)'),
         size: 17,
         color: '#e2e8f0',
-        gap: 30
+        gap: 30,
+        // the slot list reads as a list: left-aligned so every [n] lines up, while the
+        // headings above and below stay centred
+        left: true
       })
     })
 
@@ -1432,15 +1486,17 @@ export class PlayScene extends Phaser.Scene {
 
     let y = height / 2 - panelHeight / 2 + 34
 
+    const listLeft = width / 2 - SWAP_PANEL_WIDTH / 2 + 46
+
     rows.forEach((row) => {
       this.swap.objects.push(
         this.add
-          .text(width / 2, y, row.text, {
+          .text(row.left ? listLeft : width / 2, y, row.text, {
             fontFamily: 'monospace',
             fontSize: row.size + 'px',
             color: row.color
           })
-          .setOrigin(0.5)
+          .setOrigin(row.left ? 0 : 0.5, 0.5)
           .setDepth(PROMPT_DEPTH + 2)
       )
       y += row.gap

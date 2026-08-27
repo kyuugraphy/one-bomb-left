@@ -24,6 +24,33 @@ export const PASSIVE_ITEMS = [
     source: 'treasure',
     effect: '+15% move speed',
     moveSpeedMultiplier: 1.15
+  },
+  {
+    id: 'sharp_rounds',
+    name: 'Sharp Rounds',
+    slot: 'passive',
+    source: 'reward',
+    effect: '+0.5 bullet damage',
+    damageBonus: 0.5
+  },
+  {
+    id: 'hair_trigger',
+    name: 'Hair Trigger',
+    slot: 'passive',
+    source: 'reward',
+    effect: '-35ms fire cooldown',
+    fireCooldownBonus: -35
+  },
+  // The one item that costs something to wear, so a full rack is a real decision rather
+  // than a queue of upgrades.
+  {
+    id: 'heavy_vest',
+    name: 'Heavy Vest',
+    slot: 'passive',
+    source: 'treasure',
+    effect: '+2 max HP, -10% move speed',
+    maxHpBonus: 2,
+    moveSpeedMultiplier: 0.9
   }
 ]
 
@@ -43,6 +70,22 @@ export const ACTIVE_ITEMS = [
     source: 'reward',
     effect: 'heal 1 HP (half-heart)',
     cooldown: 30000
+  },
+  {
+    id: 'bulwark',
+    name: 'Bulwark',
+    slot: 'active',
+    source: 'reward',
+    effect: 'shrug off every hit for 2.5s',
+    cooldown: 24000
+  },
+  {
+    id: 'repair_kit',
+    name: 'Repair Kit',
+    slot: 'active',
+    source: 'reward',
+    effect: 'heal 2 HP (one heart)',
+    cooldown: 45000
   }
 ]
 

@@ -58,4 +58,16 @@ describe('computeStats', () => {
 
     expect(computeStats(BASE, inventory)).toEqual(BASE)
   })
+
+  test('a damage passive raises damage', () => {
+    expect(computeStats(BASE, withPassives('sharp_rounds')).damage).toBeCloseTo(1.5)
+  })
+
+  // The set multiplier applies on top of flat damage, so the two compose rather than one
+  // quietly replacing the other.
+  test('the set bonus multiplies damage that a passive already raised', () => {
+    const inventory = withPassives('sharp_rounds', 'iron_plating', 'steady_boots')
+
+    expect(computeStats(BASE, inventory).damage).toBeCloseTo(1.5 * 1.05)
+  })
 })

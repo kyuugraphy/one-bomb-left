@@ -30,7 +30,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 - Combat: bullet→enemy overlap deals 1 dmg, flash tween on hit, destroy at 0 HP. Enemy HP = 3 + `enemyStrength`.
 - Player damage: enemy touch → knockback (420 px/s, 180 ms) + 600 ms i-frames, `Hits taken` counter on screen.
 
-### Pure logic modules (tested, 94/94 passing)
+### Pure logic modules (tested, 97/97 passing)
 | Module | Exports | State touched |
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
@@ -56,9 +56,24 @@ Each item carries the display strings **and** the numbers `computeStats` reads, 
 |---|---|---|---|---|---|
 | `iron_plating` | Iron Plating | passive | reward | +1 max HP | `maxHpBonus: 1` |
 | `twitchy_trigger` | Twitchy Trigger | passive | reward | -20 ms fire cooldown | `fireCooldownBonus: -20` |
+| `hair_trigger` | Hair Trigger | passive | reward | -35 ms fire cooldown | `fireCooldownBonus: -35` |
+| `sharp_rounds` | Sharp Rounds | passive | reward | +0.5 bullet damage | `damageBonus: 0.5` |
 | `steady_boots` | Steady Boots | passive | **treasure** | +15% move speed | `moveSpeedMultiplier: 1.15` |
+| `heavy_vest` | Heavy Vest | passive | **treasure** | +2 max HP, **-10% move speed** | `maxHpBonus: 2`, `moveSpeedMultiplier: 0.9` |
 | `panic_button` | Panic Button | active | reward | damage + shove enemies in radius | `cooldown: 12000` |
+| `bulwark` | Bulwark | active | reward | shrug off every hit for 2.5 s | `cooldown: 24000` |
 | `second_wind` | Second Wind | active | reward | heal 1 HP | `cooldown: 30000` |
+| `repair_kit` | Repair Kit | active | reward | heal 2 HP | `cooldown: 45000` |
+
+**6 passives for 4 slots and 4 actives for 3** is deliberate, and `items.test.js` asserts it: items are unique, so a rack can only fill when the catalogue is bigger than the rack, and the swap prompt only fires when a *further* item turns up on a full rack. Below those counts the prompt is unreachable no matter what the UI does. Verified end to end through ordinary pickups - four real passives fill the rack and the fifth raises the prompt; three actives fill and the fourth raises it.
+
+**Heavy Vest is the one item that costs something to wear**, so a full rack is a real decision rather than a queue of upgrades. Its penalty composes with Steady Boots exactly as the multipliers imply: 320 x 1.15 x 0.9 = 331.2 px/s, measured.
+
+`damageBonus` is new in `effects.js` - flat damage sums across passives, and the set multiplier applies on top: `(base + sum) * setBonus`. Sharp Rounds plus the set measured 1.575. `onBulletHitEnemy` already read `this.stats.damage`, so nothing in the scene needed changing.
+
+**Bulwark rides the existing i-frame window** rather than adding a second kind of invulnerability: `takeHit` already refuses everything until `nextHitAt`, so pushing that out *is* the effect. Measured: i-frames went from lapsed to 2436 ms and a hit taken during it cost 0 HP. A blue ring follows the player for the duration.
+
+The **treasure chest is a real roll now** - `spawnTreasurePickup` picks from `itemsFrom('treasure')` instead of handing out `steady_boots` every time.
 
 **Items are unique — one copy each, passives *and* actives.** `hasItem(inventory, id)` searches both racks and `grantItem` checks it **before** the rack has room, returning `{ success: false, reason: 'owned' }` and mutating nothing. A duplicate passive would stack numerically (two Iron Platings read as +2 max HP); a duplicate active would be dead weight, because `cooldowns` is keyed by **item id**, so both copies would share one timer - one rule covers both racks, and no new active item can accidentally become a "double charge" later. `'owned'` deliberately outranks `'full'`: there is no new item to place, so it must not raise the swap prompt.
 
@@ -78,7 +93,9 @@ An already-owned reward **costs nothing**: `takeReward` short-circuits before to
 - Panic button: 240 px radius, 3 damage, 560 px/s shove held for 260 ms via `enemy.pushedUntil` (which `updateEnemies` honours, or the chase steer would cancel the shove on the next frame), and it clears enemy shots in the air.
 - The health bar is **rebuilt**, not resized, when Iron Plating changes `maxHp` — 6 segments → 7, and the extra max HP is handed over as real HP.
 ### Inventory UI (`PlayScene.js`)
-**Persistent slot HUD**, top-right: a row of 4 passive boxes over a row of 3 active ones, each 54 px with a short abbreviation of the item name (`Iron Plating` -> `IP`), derived at render time so a new item needs no extra data. Empty slots are darker, dim-bordered and hold a `.`; filled ones are lighter with a brighter border. The active row carries `1` `2` `3` key hints beneath it and the set-bonus line sits under that. The whole block gets its own **dark backing panel** - dim slate text over a light rock or wall band was unreadable, and the HUD floats over the room.
+**The HUD lives on the walls, never over the floor.** Hearts and the `n/m HP` label ride the **top** 56 px wall band at the left, with the set-bonus line at its right end. The item slots sit in the **bottom** wall band, **split around the doorway gap**: 4 passive boxes to its left, 3 active boxes to its right, with `1` `2` `3` key hints on a line above them. Nothing in the HUD covers a walkable tile, a rock or a pit any more.
+
+Slots are 40 px boxes holding a short abbreviation of the item name (`Iron Plating` -> `IP`; a single-word name keeps its first two letters instead of shrinking to one character, so `Bulwark` -> `BU`), derived at render time so a new item needs no extra data. Empty slots are darker, dim-bordered and hold a `.`; filled ones are lighter with a brighter border. Each group gets a **dark plate** behind it, because the wall is a light slate and the boxes and their labels were unreadable straight on that colour. Every HUD object carries an explicit depth, so pickups and enemies spawned mid-run cannot draw over it.
 
 **Active cooldown state** is readable at a glance: ready means a **green border**, cooling means a slate border, the abbreviation dimmed to 50%, a dark veil filling the box from the bottom in proportion to the time left, and the seconds remaining printed across it. Measured mid-cooldown: veil at 0.70/0.73 of the box with `8.4s` and `22.0s` showing, and each item on its own clock.
 
@@ -91,13 +108,12 @@ An already-owned reward **costs nothing**: `takeReward` short-circuits before to
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 9 files, 94 tests, green.
+- `npx vitest run` → 9 files, 97 tests, green.
 
 ## Not done / known gaps
 - **No real `gameState`.** Bombs, curses, and rewards are unit-tested in isolation and never called from `PlayScene`. `this.enemyStrength = 0` is a hardcoded stand-in.
 - **No bombs in-game** — despite the project name. No bomb input, no AoE, no bomb HUD. `bombs.js` is still unwired; `1`/`2`/`3` are actives and `SPACE` is deliberately left free for it.
 - **No take/skip choice UI** — touching a reward pickup takes it. Cursed rewards are only avoidable by not walking into them.
-- **The swap prompt cannot trigger in normal play yet.** Items are unique and the catalogue is smaller than the racks: 3 passives for 4 slots, 2 actives for 3. So a rack can never actually fill, and every duplicate takes the `already owned` path instead. The UI is built and verified with filler items, but it stays dead until there are **4+ passives or 3+ actives**. That is the strongest argument for growing the catalogue next.
 - **No swap prompt** — a full rack logs to the console and drops the item on the floor conceptually (the pickup is consumed and the item is lost). That is the next thing to build.
 - **The +5% set bonus is currently invisible in play**: bullets do 1 damage into 10 enemy HP, and `ceil(10 / 1.05)` is still 10 bullets. It is applied and testable, but it will not change a fight until damage or enemy HP scales.
 - Only one enemy ever spawns; no waves, no respawn, no difficulty ramp. Room is cleared for good once it dies.
@@ -158,5 +174,6 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [x] ~~feed `enemyStrength` back into `enemyHpFor`~~ — done, via cursed reward pickups.
 - [ ] Reward pickups with take/skip choice (the pickup exists; the choice UI does not).
 - [x] ~~Inventory UI: 4+3 slot HUD, swap prompt, "you dropped X"~~ — done; the prompt needs more items before it can fire in play.
-- [ ] More items — the catalogue is 5 deep and `treasure` has exactly one entry, so the chest is not a roll yet.
+- [x] ~~More items~~ — 10 items now (6 passives, 4 actives), both racks fillable, treasure is a 2-way roll.
+- [ ] Still only one **set bonus**, and it stays nearly invisible in play: Sharp Rounds plus the set gives 1.575 damage into 10 enemy HP, so `ceil(10/1.5)` and `ceil(10/1.575)` are both 7 bullets. Needs enemy HP or damage to scale before the +5% reads as anything.
 - [ ] Enemy waves and multiple rooms (death/restart is done).

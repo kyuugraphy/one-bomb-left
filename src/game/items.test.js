@@ -2,16 +2,25 @@ import { describe, expect, test } from 'vitest'
 import { ACTIVE_ITEMS, ITEMS, PASSIVE_ITEMS, getItem, itemsFrom } from './items.js'
 
 describe('item data', () => {
-  test('there are 3 passive items and 3 active slots worth of nothing yet', () => {
-    expect(PASSIVE_ITEMS.map((item) => item.id)).toEqual([
-      'iron_plating',
-      'twitchy_trigger',
-      'steady_boots'
-    ])
+  // Items are unique, so a rack can only fill if the catalogue is bigger than the rack -
+// and the swap prompt only fires when a further item turns up with the rack already
+  // full. Under these counts the prompt is unreachable in play, whatever the UI does.
+  test('there are enough passives to fill 4 slots and still find another', () => {
+    expect(PASSIVE_ITEMS.length).toBeGreaterThanOrEqual(5)
   })
 
-  test('there are 2 active items', () => {
-    expect(ACTIVE_ITEMS.map((item) => item.id)).toEqual(['panic_button', 'second_wind'])
+  test('there are enough actives to fill 3 slots and still find another', () => {
+    expect(ACTIVE_ITEMS.length).toBeGreaterThanOrEqual(4)
+  })
+
+  test('the original five items are still in the catalogue', () => {
+    const ids = ITEMS.map((item) => item.id)
+
+    expect(ids).toContain('iron_plating')
+    expect(ids).toContain('twitchy_trigger')
+    expect(ids).toContain('steady_boots')
+    expect(ids).toContain('panic_button')
+    expect(ids).toContain('second_wind')
   })
 
   test('every item has a unique id, a name and a source', () => {
@@ -42,16 +51,18 @@ describe('item data', () => {
     expect(getItem('no_such_item')).toBeUndefined()
   })
 
-  test('steady boots is the only treasure item', () => {
-    expect(itemsFrom('treasure').map((item) => item.id)).toEqual(['steady_boots'])
+  test('the treasure pool is a real roll', () => {
+    // more than one, so the chest is an actual roll rather than a fixed handout
+    expect(itemsFrom('treasure').length).toBeGreaterThanOrEqual(2)
+    expect(itemsFrom('treasure').map((item) => item.id)).toContain('steady_boots')
   })
 
-  test('the reward pool is everything else', () => {
-    expect(itemsFrom('reward').map((item) => item.id)).toEqual([
-      'iron_plating',
-      'twitchy_trigger',
-      'panic_button',
-      'second_wind'
-    ])
+  test('the reward pool is everything that is not treasure', () => {
+    const reward = itemsFrom('reward').map((item) => item.id)
+    const treasure = itemsFrom('treasure').map((item) => item.id)
+
+    expect(reward.length + treasure.length).toBe(ITEMS.length)
+    expect(reward.some((id) => treasure.includes(id))).toBe(false)
+    expect(reward).toContain('panic_button')
   })
 })
