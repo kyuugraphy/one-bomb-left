@@ -70,21 +70,6 @@ const PICKUP_REWARD_COLOR = 0x22d3ee
 const PICKUP_CURSED_COLOR = 0xa855f7
 const PICKUP_TREASURE_COLOR = 0xfbbf24
 const PICKUP_DROPPED_COLOR = 0x94a3b8
-
-// ===== DEBUG / TEMPORARY - remove before shipping ===========================
-// G drops a reward pickup beside the player through the ordinary spawnRewardPickup path,
-// so the whole inventory loop can be played through without farming one enemy per room.
-// Real rolls apply: random reward item, the usual cursed chance. Tracked in the cleanup
-// TODO in zz_status.md, alongside the five DEBUG_PASSIVE_ITEMS in items.js.
-const DEBUG_SPAWN_KEY = true
-
-if (DEBUG_SPAWN_KEY) {
-  console.warn(
-    '[one-bomb-left] DEBUG: key G drops a random reward pickup, and 5 extra trinkets are ' +
-      'in the item pool. Both are temporary - see the cleanup TODO in zz_status.md.'
-  )
-}
-// ===== end DEBUG ============================================================
 const DROP_OFFSET = 84
 // A declined or just-dropped pickup stays inert until the player is this far from it, so
 // the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
@@ -232,11 +217,6 @@ export class PlayScene extends Phaser.Scene {
     ]
     this.escKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
     this.swap = null
-
-    // DEBUG / TEMPORARY - see DEBUG_SPAWN_KEY above.
-    if (DEBUG_SPAWN_KEY) {
-      this.debugSpawnKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G)
-    }
   }
 
   buildWalls(width, height) {
@@ -538,13 +518,6 @@ export class PlayScene extends Phaser.Scene {
     this.updateActives(time)
     this.updatePickupRearm()
     this.refreshItemHud(time)
-
-    // DEBUG / TEMPORARY - see DEBUG_SPAWN_KEY above.
-    if (DEBUG_SPAWN_KEY && Phaser.Input.Keyboard.JustDown(this.debugSpawnKey)) {
-      this.debugDropCount = (this.debugDropCount ?? 0) + 1
-      const spot = this.freeSpotNear(this.player.x, this.player.y, this.debugDropCount)
-      this.spawnRewardPickup(spot.x, spot.y)
-    }
 
     if (this.bulwarkRing) {
       if (this.bulwarkRing.active) {
@@ -1062,13 +1035,8 @@ export class PlayScene extends Phaser.Scene {
     })
   }
 
-  // startIndex rotates which direction is tried first, so several drops in a row fan out
-  // around the player instead of stacking on one spot.
-  freeSpotNear(x, y, startIndex = 0) {
-    const angles = [0, 90, 180, 270, 45, 135, 225, 315]
-
-    for (let step = 0; step < angles.length; step++) {
-      const degrees = angles[(startIndex + step) % angles.length]
+  freeSpotNear(x, y) {
+    for (const degrees of [0, 90, 180, 270, 45, 135, 225, 315]) {
       const radians = Phaser.Math.DegToRad(degrees)
       const spotX = x + Math.cos(radians) * DROP_OFFSET
       const spotY = y + Math.sin(radians) * DROP_OFFSET
@@ -1078,7 +1046,6 @@ export class PlayScene extends Phaser.Scene {
         return new Phaser.Math.Vector2(spotX, spotY)
       }
     }
-
 
     // boxed in - drop it underfoot, the re-arm distance still keeps it inert for a step
     return new Phaser.Math.Vector2(x, y)

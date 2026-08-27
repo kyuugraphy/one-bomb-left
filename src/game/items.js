@@ -1,62 +1,6 @@
 // Item data. `effect` is the line shown to the player; the numeric fields next to it are
 // what computeStats() actually reads, so adding an item never means editing effects.js.
-
-// ===== DEBUG / TEMPORARY - remove before shipping ===========================
-// Five extra passive trinkets, so a 4-slot rack can be filled and swapped several times
-// over in one sitting while play-testing the pickup -> full rack -> swap -> floor loop.
-// They only use stat fields that already exist. Flip the flag to false to drop the lot,
-// or delete this block and the spread in PASSIVE_ITEMS below. Tracked in the cleanup TODO
-// in zz_status.md, alongside the G debug spawn key that goes with them.
-const DEBUG_EXTRA_PASSIVES = true
-
-const DEBUG_PASSIVE_ITEMS = [
-  {
-    id: 'lucky_charm',
-    name: 'Lucky Charm',
-    slot: 'passive',
-    source: 'reward',
-    effect: '+1 max HP (half-heart)',
-    maxHpBonus: 1
-  },
-  {
-    id: 'scrap_armour',
-    name: 'Scrap Armour',
-    slot: 'passive',
-    source: 'reward',
-    effect: '+3 max HP',
-    maxHpBonus: 3
-  },
-  {
-    id: 'featherweight',
-    name: 'Featherweight',
-    slot: 'passive',
-    source: 'reward',
-    effect: '+25% move speed, -1 max HP',
-    moveSpeedMultiplier: 1.25,
-    maxHpBonus: -1
-  },
-  {
-    id: 'heavy_slugs',
-    name: 'Heavy Slugs',
-    slot: 'passive',
-    source: 'reward',
-    effect: '+1 bullet damage, +40ms fire cooldown',
-    damageBonus: 1,
-    fireCooldownBonus: 40
-  },
-  {
-    id: 'oil_can',
-    name: 'Oil Can',
-    slot: 'passive',
-    source: 'treasure',
-    effect: '-25ms fire cooldown, +5% move speed',
-    fireCooldownBonus: -25,
-    moveSpeedMultiplier: 1.05
-  }
-]
-// ===== end DEBUG ============================================================
-
-const REAL_PASSIVE_ITEMS = [
+export const PASSIVE_ITEMS = [
   {
     id: 'iron_plating',
     name: 'Iron Plating',
@@ -108,11 +52,6 @@ const REAL_PASSIVE_ITEMS = [
     maxHpBonus: 2,
     moveSpeedMultiplier: 0.9
   }
-]
-
-export const PASSIVE_ITEMS = [
-  ...REAL_PASSIVE_ITEMS,
-  ...(DEBUG_EXTRA_PASSIVES ? DEBUG_PASSIVE_ITEMS : [])
 ]
 
 export const ACTIVE_ITEMS = [
