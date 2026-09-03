@@ -46,6 +46,21 @@ export function sellableItems(items, inventory) {
   )
 }
 
+// What a shelf says about a piece of stock *before* it is bought. The price stays
+// visible - a cost is something the player is entitled to know before committing - but a
+// catalogue item's name does not, because the name is the thing being bought. It shows
+// its tier instead, which the price already implies anyway and which answers the one
+// question worth asking before you buy: have I got room for one of those.
+//
+// The refills keep their names. They are not items and there is nothing to find out about
+// them: an HP Refill is what it says on the tin, and hiding it would make a puzzle out of
+// something that is meant to be the obvious purchase.
+const SLOT_LABEL = { trinket: 'TRINKET', passive: 'PASSIVE', active: 'ACTIVE' }
+
+export function shelfLabelFor(entry) {
+  return entry.kind === 'item' ? `${SLOT_LABEL[entry.item.slot]}  ?` : entry.name
+}
+
 export function priceOf(entry) {
   return entry.kind === 'item' ? SHOP_PRICES[entry.item.slot] : SHOP_PRICES[entry.kind]
 }

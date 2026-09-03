@@ -4,7 +4,12 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, eighth pass) — the door lie budget
+## Latest session (2026-09-03, ninth pass) — the reveal beat
+An item on the floor now shows its colour and nothing else. Touch it and there is a **400 ms beat** — the box swells and turns over inside an expanding ring — and only when it ends does the item land: the grant, the stat change and the name all arrive together, instead of the stats moving silently before you know why.
+
+Shop stock works the same way. The price stays on the shelf, because a cost is something you are entitled to know before committing; the name does not, because the name is what you are buying. A catalogue item's shelf label reads `PASSIVE  ?` over its price. **The refills keep their names** — an HP Refill is what it says on the tin, and hiding it would make a puzzle of the obvious purchase. Heals, EXP and bombs are unchanged and instant.
+
+## Previous session (2026-09-03, eighth pass) — the door lie budget
 The telegraph no longer lies on a flat per-door coin flip. **Each run is dealt a lie budget of 0-4** when it starts; past it every door tells the truth, and **two lies can never land back to back**. When a door does mislead you, the room says so on entry by name.
 
 Where the memory lives: **`gameState`**, because it is the only thing with exactly the right lifetime — carried through every door by reference, rebuilt by `freshGameState` on death or Exit. `lieCap`, `liesSoFar` and `lastDoorWasLie` sit beside `roomNumber`.
@@ -73,7 +78,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2489 lines)
+### Game loop (`src/game/PlayScene.js`, 2597 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
@@ -102,7 +107,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
 | `currency.js` | `addExp`, `spendExp` | `exp` |
-| `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `rollShopStock` | none - rolls, prices, and what may be sold at all |
+| `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `shelfLabelFor`, `rollShopStock` | none - rolls, prices, what may be sold, and what the shelf gives away |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP` | none - rolls whether a kill leaves half a heart |
 | `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `rollLieCap`, `isLie`, `mustBeHonest`, `MAX_LIE_CAP`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
@@ -429,6 +434,25 @@ Two things it used to do that still happen, by other means: a pickup can still b
 
 Swept in the browser over 48 room clears across all four room types: **no `reward` pickup and nothing flagged cursed, ever** - only `treasure`, `debuff`, `heal` and `shop`.
 
+### The reveal beat
+**400 ms**, `REVEAL_MS`. Under about a quarter second it reads as the game stuttering rather than as a moment; much past half a second it starts costing dodges, and the room does not pause for it — a reveal can happen mid-fight with three enemies closing.
+
+**The animation:** the pickup stops its idle loot pulse, then swells to **1.9x** and turns a full **360 degrees** on `Cubic.easeOut`, while a white ring opens outward from it to **2.8x** and fades. No audio yet — there is none in the game at all.
+
+**Nothing happens until it ends.** `beginReveal(pickup, onRevealed)` holds the whole transaction: the `grantItem`, the `refreshStats`, the name and effect line, and for a purchase the EXP too. Measured frame by frame on a Sluggish pickup: max HP stayed 6 and move speed stayed 320 for every frame of the beat, then went to 7 and 272 on the frame it finished, with the name arriving on that same frame.
+
+**What reveals and what does not.** Items do — the safe room-clear drop, the risky room-clear debuff, a shop catalogue item, and an item dropped back on the floor by a swap. EXP, heals and bomb refills do not, because there is no identity to find out: a heal is a heal, and making the player wait to be told so is ceremony rather than information.
+
+**Nothing on the ground names an item.** The only ground label that ever existed was the shop's price tag, and `shelfLabelFor` now returns the tier and a `?` for a catalogue item — `PASSIVE  ?` — and the full name for a refill. It is pure and tested against the whole catalogue: no item name and no item effect can appear on a shelf.
+
+**Three things the beat broke, all found by measuring:**
+
+- **A reveal restarting every frame.** The player stands on the pickup while it plays, so the overlap re-fires. `pickup.spec.revealing` is checked in `onPickup`, and a refused purchase now holds off the whole transaction on the refusal cooldown rather than just its toast.
+- **Pickups that survive the beat losing their pulse.** An item already owned, or one the rack has no room for, stays on the floor — so `addLootPulse` was split out of `addPickup` and is put back. An already-owned item also goes `declined` now, so it needs stepping away from rather than replaying the reveal forever.
+- **The payoff being wiped by the next toast.** In an unguarded shop the room clears the instant the shelf empties, so `room clear - N doors` overwrote the confirmation the player had just waited 400 ms for. The reveal's line now goes to the `notice` slot above the toast, which is the same slot the door-lied line uses; it outlives the toast and nothing else writes to it.
+
+Verified: 0 name or effect labels on the ground before pickup; stats untouched and no name for every frame of the beat; the effect and the name landing on the same frame at the end; a shop shelf reading `PASSIVE  ?` / `10 EXP` with the refills still named; a refill buying instantly with no beat; and a purchase confirmation surviving the room clearing underneath it.
+
 ### The lie budget
 A door still advertises a reward type by colour and a difficulty by glow, and still rolls `TYPE_ACCURACY` / `TIER_ACCURACY` at 0.9 each — but those rolls are now fenced by two rules that belong to the **run** rather than to the door.
 
@@ -533,7 +557,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 18 files, 333 tests, green.
+- `npx vitest run` → 18 files, 339 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.

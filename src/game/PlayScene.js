@@ -12,7 +12,7 @@ import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
 import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
-import { canAfford, priceOf, rollShopStock, sellableItems } from './shop.js'
+import { canAfford, priceOf, rollShopStock, sellableItems, shelfLabelFor } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
 import { recordDoorOutcome, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
@@ -146,6 +146,18 @@ const DROP_OFFSET = 84
 // the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
 const PICKUP_REARM_DISTANCE = 78
 
+// The reveal beat. An item on the floor shows its colour and nothing else; what it *is*
+// arrives a moment after you touch it, along with the effect itself, so what you see and
+// what you get land together instead of the stats moving silently before you know why.
+//
+// 400 ms: under about a quarter second it reads as the game stuttering rather than as a
+// moment, and much over half a second it starts costing dodges - the room does not pause
+// for this, and it can happen mid-fight.
+const REVEAL_MS = 400
+const REVEAL_SCALE = 1.9
+const REVEAL_RING_SCALE = 2.8
+const REVEAL_RING_COLOR = 0xf8fafc
+
 // Off-screen enemy arrows. Only a big room can hide an enemy - a rectangular room is the
 // viewport - so these only ever appear in one. The ring is inset far enough that a whole
 // arrow fits on screen, and they draw over the HUD rather than under it: an arrow half
@@ -185,8 +197,6 @@ const abbreviate = (name) => {
 
   return initials.slice(0, 3).toUpperCase()
 }
-// Stock is either a catalogue item or a refill; both carry a name, one a layer deeper.
-const shopLabelFor = (entry) => (entry.kind === 'item' ? entry.item.name : entry.name)
 
 const PANIC_RADIUS = 240
 const PANIC_DAMAGE = 3
@@ -196,11 +206,13 @@ const SECOND_WIND_HEAL = 1
 const REPAIR_KIT_HEAL = 2
 const BULWARK_DURATION = 2500
 const TOAST_LIFETIME = 2800
-// The misled line sits above the ordinary toast and outlives it: it is the only telling
-// the player gets that a door lied, and it must survive the "room clear" toast that an
-// empty room fires on its first frame.
-const MISLED_TOAST_OFFSET = 104
-const MISLED_TOAST_LIFETIME = 5200
+// A second line above the ordinary toast, for the two things the player must not miss:
+// what a door lied about, and what an item turned out to be. It needs its own slot
+// because the toast is a single shared one and gets overwritten - a room with nothing
+// left in it fires "room clear - N doors" on its first frame, which was swallowing both
+// of these, including the confirmation the player had just waited out a reveal for.
+const NOTICE_OFFSET = 104
+const NOTICE_LIFETIME = 5200
 
 // The unmodified player. Items are layered on top of this by computeStats().
 const BASE_STATS = {
@@ -1329,9 +1341,10 @@ export class PlayScene extends Phaser.Scene {
 
     // The price rides under the box: a shop only works if the cost is visible before you
     // walk into it, and there is no room for it inside a 24 px pickup. Name over price on
-    // two lines, so a long name stays inside its own slot on the shelf.
+    // two lines, so a long refill name stays inside its own slot on the shelf. What sits
+    // above the price is the tier, not the name - see shelfLabelFor.
     pickup.spec.priceTag = this.add
-      .text(spot.x, spot.y + PICKUP_SIZE, `${shopLabelFor(entry)}\n${price} EXP`, {
+      .text(spot.x, spot.y + PICKUP_SIZE, `${shelfLabelFor(entry)}\n${price} EXP`, {
         fontFamily: 'monospace',
         fontSize: '13px',
         color: '#e2e8f0',
@@ -1346,14 +1359,34 @@ export class PlayScene extends Phaser.Scene {
   buyFromShop(pickup) {
     const { entry, price } = pickup.spec
 
+    // A refusal holds off the whole transaction, not just its toast: without this, a
+    // player standing on stock they cannot use replays the reveal every frame.
+    if (this.time.now < (pickup.spec.nextRefusalAt ?? 0)) {
+      return
+    }
+
     if (!canAfford(this.gameState, price)) {
       this.refusePurchase(pickup, `${price} EXP - you have ${this.gameState.exp}`)
       return
     }
 
+    // A refill says what it is on the shelf, so it lands at once. A catalogue item is
+    // bought blind - the shelf shows its tier and its price and no more - so the beat
+    // goes between paying and finding out.
+    if (entry.kind !== 'item') {
+      this.completePurchase(pickup)
+      return
+    }
+
+    this.beginReveal(pickup, () => this.completePurchase(pickup))
+  }
+
+  completePurchase(pickup) {
+    const { entry, price } = pickup.spec
     const result = this.applyPurchase(entry)
 
     if (!result.success) {
+      this.addLootPulse(pickup)
       this.refusePurchase(pickup, result.message)
       return
     }
@@ -1363,7 +1396,7 @@ export class PlayScene extends Phaser.Scene {
     pickup.destroy()
     this.refreshStats()
 
-    this.toast(`bought ${result.message} (-${price} EXP)`, '#a3e635')
+    this.notice(`bought ${result.message} (-${price} EXP)`, '#a3e635')
     console.log('[one-bomb-left] bought', entry.kind, 'exp left', this.gameState.exp)
 
     // Only a purchase that actually landed closes the shop - a refusal above returns
@@ -1687,23 +1720,33 @@ ${advertised.tier}`, {
     }
 
     const promised = DOOR_STYLE[this.misled.type].label
+
+    this.notice(`the door promised ${promised} ${this.misled.tier} - it lied`, '#fb923c')
+  }
+
+  // The line above the toast. Only one at a time - a later notice replaces an earlier one,
+  // because both are one-off tellings and the newer one is the one being reacted to.
+  notice(message, color) {
+    if (this.noticeText) {
+      this.noticeText.destroy()
+    }
+
     const { width, height } = this.scale
 
-    this.misledText = this.add
-      .text(
-        width / 2,
-        height - MISLED_TOAST_OFFSET,
-        `the door promised ${promised} ${this.misled.tier} - it lied`,
-        { fontFamily: 'monospace', fontSize: '20px', color: '#fb923c' }
-      )
+    this.noticeText = this.add
+      .text(width / 2, height - NOTICE_OFFSET, message, {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color
+      })
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(HUD_DEPTH)
 
     this.tweens.add({
-      targets: this.misledText,
+      targets: this.noticeText,
       alpha: 0,
-      delay: MISLED_TOAST_LIFETIME - 600,
+      delay: NOTICE_LIFETIME - 600,
       duration: 600
     })
   }
@@ -1718,7 +1761,15 @@ ${advertised.tier}`, {
     pickup.body.setImmovable(true)
     this.pickups.add(pickup)
 
-    // a slow pulse so a pickup reads as loot rather than another bit of level geometry
+    this.addLootPulse(pickup)
+
+    return pickup
+  }
+
+  // A slow pulse so a pickup reads as loot rather than another bit of level geometry. Its
+  // own method because the reveal has to stop it and then put it back, for the pickups
+  // that survive being revealed - one already owned, or one the rack has no room for.
+  addLootPulse(pickup) {
     this.tweens.add({
       targets: pickup,
       scaleX: 1.25,
@@ -1727,15 +1778,62 @@ ${advertised.tier}`, {
       yoyo: true,
       repeat: -1
     })
+  }
 
-    return pickup
+  // The beat between touching an item and finding out what it was. Nothing about the run
+  // changes until `onRevealed` runs: the grant, the stat recompute and the name all wait
+  // for the end of it. A ring opens outward while the box swells and turns over.
+  //
+  // Only items go through here. EXP, heals and bomb refills stay instant, because there
+  // is no identity to find out - a heal is a heal, and making the player wait to be told
+  // so would be ceremony rather than information.
+  beginReveal(pickup, onRevealed) {
+    pickup.spec.revealing = true
+    this.tweens.killTweensOf(pickup)
+    pickup.setScale(1)
+
+    const ring = this.add
+      .circle(pickup.x, pickup.y, PICKUP_SIZE * 0.75)
+      .setStrokeStyle(2, REVEAL_RING_COLOR, 0.9)
+
+    this.tweens.add({
+      targets: ring,
+      scale: REVEAL_RING_SCALE,
+      alpha: 0,
+      duration: REVEAL_MS,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy()
+    })
+
+    this.tweens.add({
+      targets: pickup,
+      scaleX: REVEAL_SCALE,
+      scaleY: REVEAL_SCALE,
+      angle: 360,
+      duration: REVEAL_MS,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        pickup.spec.revealing = false
+
+        // A restart mid-beat takes the pickup with it; nothing to reveal to.
+        if (!pickup.active) {
+          return
+        }
+
+        pickup.setScale(1)
+        pickup.setAngle(0)
+        onRevealed()
+      }
+    })
   }
 
   // Touching a pickup takes it - the take/skip choice is still to come, so a debuff is
   // shown in purple and the only way to skip one is to walk around it.
   onPickup(player, pickup) {
-    // declined pickups and items just dropped underfoot stay inert until stepped off
-    if (this.swap || pickup.spec.declined) {
+    // declined pickups, items just dropped underfoot, and anything already mid-beat all
+    // stay inert - the last one is what stops a reveal restarting every frame while the
+    // player stands on top of it
+    if (this.swap || pickup.spec.declined || pickup.spec.revealing) {
       return
     }
 
@@ -1749,6 +1847,12 @@ ${advertised.tier}`, {
       return
     }
 
+    this.beginReveal(pickup, () => this.applyItemPickup(pickup))
+  }
+
+  // What the beat resolves to. Everything the pickup does to the run happens here, at the
+  // end of it, so the HP bar moving and the name appearing are the same moment.
+  applyItemPickup(pickup) {
     const { kind, item } = pickup.spec
 
     // Every pickup goes into the rack the same way. There used to be a second path for a
@@ -1760,17 +1864,19 @@ ${advertised.tier}`, {
     // the room rather than eaten for nothing - swap something out and it can be taken.
     // The overlap re-fires every frame while standing on it, so announce it just once.
     if (result && result.reason === 'owned') {
-      if (!pickup.spec.announcedOwned) {
-        pickup.spec.announcedOwned = true
-        this.toast(`${item.name} - already owned`, '#94a3b8')
-        console.log('[one-bomb-left] already owned, left in the room:', item.id)
-      }
+      this.toast(`${item.name} - already owned`, '#94a3b8')
+      console.log('[one-bomb-left] already owned, left in the room:', item.id)
+      // Now that it is known, it goes inert until stepped away from - otherwise standing
+      // on it would replay the beat, and the reveal, over and over.
+      pickup.spec.declined = true
+      this.addLootPulse(pickup)
       return
     }
 
     // A full rack is a choice, not a loss: the pickup stays in the room until the player
     // either picks a slot or backs out.
     if (needsSwapPrompt(result)) {
+      this.addLootPulse(pickup)
       this.openSwapPrompt(item, pickup)
       return
     }
@@ -1788,7 +1894,9 @@ ${advertised.tier}`, {
     // cost as well as a gift, and the toast should not read like an unqualified win.
     const debuff = kind === 'debuff'
 
-    this.toast(
+    // The notice slot, not the toast: this is what the reveal was for, and an empty room
+    // firing "room clear" on the next frame would otherwise wipe it.
+    this.notice(
       `${item.name}: ${item.effect}${debuff ? ' (DEBUFF)' : ''}`,
       debuff ? '#c084fc' : '#67e8f9'
     )

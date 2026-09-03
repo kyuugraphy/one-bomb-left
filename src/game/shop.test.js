@@ -9,7 +9,8 @@ import {
   canAfford,
   priceOf,
   rollShopStock,
-  sellableItems
+  sellableItems,
+  shelfLabelFor
 } from './shop.js'
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
@@ -185,5 +186,49 @@ describe('canAfford', () => {
 
   it('refuses one short', () => {
     expect(canAfford({ exp: 6 }, 7)).toBe(false)
+  })
+})
+
+// What the shelf gives away before you pay. The price is a cost and stays visible; the
+// item's identity is the thing being bought and does not.
+describe('shelfLabelFor', () => {
+  it('never shows a catalogue item name', () => {
+    ITEMS.forEach((item) => {
+      expect(shelfLabelFor({ kind: 'item', item })).not.toContain(item.name)
+    })
+  })
+
+  it('never shows a catalogue item effect', () => {
+    ITEMS.forEach((item) => {
+      expect(shelfLabelFor({ kind: 'item', item })).not.toContain(item.effect)
+    })
+  })
+
+  it('shows the tier instead, which the price already implies', () => {
+    expect(shelfLabelFor({ kind: 'item', item: getItem('heavy_vest') })).toContain('TRINKET')
+    expect(shelfLabelFor({ kind: 'item', item: getItem('iron_plating') })).toContain('PASSIVE')
+    expect(shelfLabelFor({ kind: 'item', item: getItem('panic_button') })).toContain('ACTIVE')
+  })
+
+  it('marks a catalogue item as unknown', () => {
+    ITEMS.forEach((item) => expect(shelfLabelFor({ kind: 'item', item })).toContain('?'))
+  })
+
+  // The refills are not items: there is nothing to find out, and hiding them would make a
+  // puzzle out of the obvious purchase.
+  it('keeps the refills named in full', () => {
+    expect(shelfLabelFor(HP_REFILL)).toBe(HP_REFILL.name)
+    expect(shelfLabelFor(BOMB_REFILL)).toBe(BOMB_REFILL.name)
+  })
+
+  it('labels every entry a real shelf can hold', () => {
+    const stock = rollShopStock(POOL, rng(0, 0, 0, 0))
+
+    stock.forEach((entry) => {
+      const label = shelfLabelFor(entry)
+
+      expect(typeof label).toBe('string')
+      expect(label.length).toBeGreaterThan(0)
+    })
   })
 })
