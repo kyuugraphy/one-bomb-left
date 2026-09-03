@@ -21,6 +21,9 @@ export function computeStats(base, inventory) {
 
   return {
     maxHp: Math.max(MIN_MAX_HP, base.maxHp + sum('maxHpBonus')),
+    // What a kill is worth. A stat rather than a constant since Slug Step pays extra for
+    // each one - the slug it puts in every room is the price of that.
+    expPerKill: base.expPerKill + sum('expPerKillBonus'),
     // Flat millisecond bonuses first, then rate as a multiplier on what is left. A rate
     // multiplier divides rather than multiplies, because cooldown is the reciprocal of
     // rate: -15% fire rate is 0.85 shots for the same second, which is a cooldown 1/0.85

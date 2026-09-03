@@ -15,9 +15,6 @@ import { createInventory } from './inventory.js'
 // The run's own state, everything that survives a door and nothing that survives a death.
 export function freshGameState() {
   return {
-    riskLevel: 0,
-    enemyStrength: 0,
-    rewardsCollected: 0,
     exp: 0,
     bombCount: 0,
     // How deep the run is. The entrance is room 1, and every door taken adds one; the

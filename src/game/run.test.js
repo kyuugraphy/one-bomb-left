@@ -6,16 +6,13 @@ import { countOwned, passiveCounts } from './inventory.js'
 import { getItem } from './items.js'
 import { freshGameState, roomFor } from './run.js'
 
-// A run part-way through: some EXP banked, an item in the rack, curses taken, four rooms
+// A run part-way through: some EXP banked, an item in the rack, some bombs, four rooms
 // deep and standing in a hard shaped room.
 function runInProgress() {
   const gameState = freshGameState()
 
   addExp(gameState, 37)
   grantItem(gameState, getItem('iron_plating'))
-  gameState.riskLevel = 2
-  gameState.enemyStrength = 3
-  gameState.rewardsCollected = 5
   gameState.bombCount = 2
   gameState.roomNumber = 4
 
@@ -34,9 +31,6 @@ describe('freshGameState', () => {
 
     expect(state.exp).toBe(0)
     expect(state.bombCount).toBe(0)
-    expect(state.riskLevel).toBe(0)
-    expect(state.enemyStrength).toBe(0)
-    expect(state.rewardsCollected).toBe(0)
     expect(state.inventory.trinket).toBe(null)
     expect(state.inventory.passives).toEqual([])
     expect(state.inventory.actives).toEqual([null, null, null])
@@ -81,15 +75,8 @@ describe('roomFor - starting a fresh run', () => {
     })
   })
 
-  it('drops the curses and the bombs with the rest of it', () => {
-    emptyPayloads.forEach((payload) => {
-      const { gameState } = roomFor(payload)
-
-      expect(gameState.riskLevel).toBe(0)
-      expect(gameState.enemyStrength).toBe(0)
-      expect(gameState.rewardsCollected).toBe(0)
-      expect(gameState.bombCount).toBe(0)
-    })
+  it('drops the bombs with the rest of it', () => {
+    emptyPayloads.forEach((payload) => expect(roomFor(payload).gameState.bombCount).toBe(0))
   })
 
   it('goes back to the entrance room rather than the room it died in', () => {
@@ -143,15 +130,13 @@ describe('roomFor - walking into the next room', () => {
     expect(roomFor(doorPayload(gameState, 4)).gameState).toBe(gameState)
   })
 
-  it('keeps the EXP, the items and the curses', () => {
+  it('keeps the EXP, the items and the bombs', () => {
     const gameState = runInProgress()
     const room = roomFor(doorPayload(gameState, 4))
 
     expect(room.gameState.exp).toBe(37)
     expect(countOwned(room.gameState.inventory, 'iron_plating')).toBe(1)
     expect(passiveCounts(room.gameState.inventory).length).toBe(1)
-    expect(room.gameState.riskLevel).toBe(2)
-    expect(room.gameState.enemyStrength).toBe(3)
     expect(room.gameState.bombCount).toBe(2)
   })
 

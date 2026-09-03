@@ -78,15 +78,15 @@ export function resolveDoor(door, randomFn) {
 // combat_heavy is gone: safe and risky already cover "how much of a fight is this", and a
 // third combat door was a difficulty dial wearing a reward door's clothes.
 const ROOM_PLANS = {
-  shop: { roomType: 'shop', enemies: { easy: 0, medium: 2, hard: 3 }, cursedChance: 0 },
-  safe_reward: { roomType: 'combat', enemies: { easy: 1, medium: 2, hard: 3 }, cursedChance: 0 },
-  risky_reward: { roomType: 'combat', enemies: { easy: 4, medium: 6, hard: 9 }, cursedChance: 0.9 },
-  puzzle: { roomType: 'puzzle', enemies: { easy: 0, medium: 0, hard: 0 }, cursedChance: 0 }
+  shop: { roomType: 'shop', enemies: { easy: 0, medium: 2, hard: 3 } },
+  safe_reward: { roomType: 'combat', enemies: { easy: 1, medium: 2, hard: 3 } },
+  risky_reward: { roomType: 'combat', enemies: { easy: 4, medium: 6, hard: 9 } },
+  puzzle: { roomType: 'puzzle', enemies: { easy: 0, medium: 0, hard: 0 } }
 }
 
 // Tier does two things at once: more enemies (per the table) and tougher ones. The
-// bonus rides on top of the run's own enemyStrength, so a hard room is hard on top of
-// however many 'enemy' curses the player has collected - it does not replace them.
+// bonus is the only thing that toughens an enemy now: the 'enemy' curse that used to
+// stack on top of it went with the curse system.
 const TIER_STRENGTH_BONUS = { easy: 0, medium: 1, hard: 2 }
 
 // The room a run starts in. No door chose it, so it is spelled out rather than rolled.
@@ -100,8 +100,7 @@ export function roomPlanFor({ type, tier }) {
     tier,
     roomType: spec.roomType,
     enemyCount: spec.enemies[tier],
-    enemyStrengthBonus: TIER_STRENGTH_BONUS[tier],
-    cursedChance: spec.cursedChance
+    enemyStrengthBonus: TIER_STRENGTH_BONUS[tier]
   }
 }
 

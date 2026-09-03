@@ -145,8 +145,9 @@ describe('roomPlanFor', () => {
         expect(built.roomType).toMatch(/^(combat|shop|puzzle)$/)
         expect(built.enemyCount).toBeGreaterThanOrEqual(0)
         expect(built.enemyStrengthBonus).toBeGreaterThanOrEqual(0)
-        expect(built.cursedChance).toBeGreaterThanOrEqual(0)
-        expect(built.cursedChance).toBeLessThanOrEqual(1)
+        // no cursedChance any more: the curse system it fed is gone, and a risky room
+        // pays in debuff items instead of in poisoned ones
+        expect(built.cursedChance).toBeUndefined()
       })
     )
   })
@@ -183,21 +184,10 @@ describe('roomPlanFor', () => {
     )
   })
 
-  it('curses nearly every reward behind a risky door', () => {
-    expect(plan('risky_reward', 'medium').cursedChance).toBeGreaterThan(0.8)
-  })
-
-  it('curses nothing behind a safe door', () => {
-    TIERS.forEach((tier) => expect(plan('safe_reward', tier).cursedChance).toBe(0))
-  })
-
   // The puzzle room is a stub: no enemies at any tier, nothing cursed, nothing to clear.
   // The tier still rides on the door, because the telegraph lies about it like any other.
   it('leaves a puzzle room empty at every tier', () => {
-    TIERS.forEach((tier) => {
-      expect(plan('puzzle', tier).enemyCount).toBe(0)
-      expect(plan('puzzle', tier).cursedChance).toBe(0)
-    })
+    TIERS.forEach((tier) => expect(plan('puzzle', tier).enemyCount).toBe(0))
   })
 
   it('has no combat_heavy door left to plan for', () => {

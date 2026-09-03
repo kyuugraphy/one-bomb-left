@@ -3,7 +3,7 @@ import { MIN_MAX_HP, computeStats } from './effects.js'
 import { createInventory } from './inventory.js'
 import { getItem } from './items.js'
 
-const BASE = { maxHp: 6, fireCooldown: 180, moveSpeed: 320, damage: 1 }
+const BASE = { maxHp: 6, fireCooldown: 180, moveSpeed: 320, damage: 1, expPerKill: 2 }
 
 const withPassives = (...ids) => {
   const inventory = createInventory()
@@ -124,15 +124,47 @@ describe('computeStats with debuffs', () => {
     expect(fireCooldown).toBeCloseTo((BASE.fireCooldown - 35) / 0.85)
   })
 
-  test('Sluggish takes 15% of move speed, and stacks with a boost', () => {
-    expect(computeStats(BASE, withPassives('sluggish')).moveSpeed).toBeCloseTo(320 * 0.85)
-    expect(computeStats(BASE, withPassives('sluggish', 'steady_boots')).moveSpeed)
-      .toBeCloseTo(320 * 0.85 * 1.15)
+  // Every debuff is a bargain now: a real bonus bolted to a real cost. Both halves have
+  // to land, and both have to land from the same pickup.
+  test('Rusty Grip pays a whole point of damage for its slower gun', () => {
+    const stats = computeStats(BASE, withPassives('rusty_grip'))
+
+    expect(stats.damage).toBeCloseTo(2)
+    expect(stats.fireCooldown).toBeCloseTo(180 / 0.85)
   })
 
-  test('Thin Skin costs half a heart, and cancels against Iron Plating', () => {
-    expect(computeStats(BASE, withPassives('thin_skin')).maxHp).toBe(5)
-    expect(computeStats(BASE, withPassives('thin_skin', 'iron_plating')).maxHp).toBe(6)
+  test('Sluggish pays half a heart for its slower legs', () => {
+    const stats = computeStats(BASE, withPassives('sluggish'))
+
+    expect(stats.maxHp).toBe(7)
+    expect(stats.moveSpeed).toBeCloseTo(320 * 0.85)
+  })
+
+  test('Thin Skin buys speed with half a heart', () => {
+    const stats = computeStats(BASE, withPassives('thin_skin'))
+
+    expect(stats.maxHp).toBe(5)
+    expect(stats.moveSpeed).toBeCloseTo(320 * 1.15)
+  })
+
+  test('Slug Step pays a point of EXP a kill, and nothing else it does is a stat', () => {
+    const stats = computeStats(BASE, withPassives('slug_step'))
+
+    expect(stats.expPerKill).toBe(3)
+    expect({ ...stats, expPerKill: BASE.expPerKill }).toEqual(computeStats(BASE, createInventory()))
+  })
+
+  test('Slug Step stacks its EXP, as the slugs it costs stack too', () => {
+    expect(computeStats(BASE, withPassives('slug_step', 'slug_step')).expPerKill).toBe(4)
+  })
+
+  // Sluggish and Thin Skin are near-opposites, so holding both should mostly cancel: the
+  // half-hearts undo each other and the speed multipliers very nearly do.
+  test('Sluggish and Thin Skin together nearly cancel out', () => {
+    const stats = computeStats(BASE, withPassives('sluggish', 'thin_skin'))
+
+    expect(stats.maxHp).toBe(BASE.maxHp)
+    expect(stats.moveSpeed).toBeCloseTo(320 * 0.85 * 1.15)
   })
 
   // The uncapped tier means nothing stops a run collecting six of these. Zero max HP is
@@ -147,14 +179,10 @@ describe('computeStats with debuffs', () => {
     expect(computeStats(BASE, withPassives(...Array(12).fill('thin_skin'))).maxHp).toBe(MIN_MAX_HP)
   })
 
-  test('Slug Step changes no stat at all - the scene reads it, not computeStats', () => {
-    expect(computeStats(BASE, withPassives('slug_step'))).toEqual(computeStats(BASE, createInventory()))
-  })
+  test('a debuff stacks with an ordinary passive of the same kind', () => {
+    const stats = computeStats(BASE, withPassives('sluggish', 'steady_boots', 'iron_plating'))
 
-  test('a debuff and a buff of the same kind cancel out', () => {
-    const both = computeStats(BASE, withPassives('sluggish', 'steady_boots', 'thin_skin', 'iron_plating'))
-
-    expect(both.maxHp).toBe(BASE.maxHp)
-    expect(both.moveSpeed).toBeCloseTo(320 * 0.85 * 1.15)
+    expect(stats.maxHp).toBe(BASE.maxHp + 2)
+    expect(stats.moveSpeed).toBeCloseTo(320 * 0.85 * 1.15)
   })
 })

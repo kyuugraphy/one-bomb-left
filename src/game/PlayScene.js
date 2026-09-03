@@ -12,7 +12,6 @@ import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
 import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
-import { collectReward, takeReward } from './rewards.js'
 import { canAfford, priceOf, rollShopStock, sellableItems } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
 import { freshGameState, roomFor } from './run.js'
@@ -105,6 +104,15 @@ const EXIT_SIZE = CELL - 8
 // Doors sit along the top of the room, clear of the walls, spread like the shop shelf.
 const DOOR_MARGIN = WALL_THICKNESS + 90
 const DOOR_ROW_Y = CELL * 1.5
+// How far a door pad may be nudged from where it was aimed. Without a limit the snap to a
+// clear cell would walk a pad as far as it had to - measured at two thirds of the way down
+// an 840 px room - and a door standing in open floor is taken by anyone who walks over it.
+// Two cells keeps it in the wall band it belongs to.
+const DOOR_SNAP_LIMIT = CELL * 2
+// A door does not work until the player is clear of it. A pad that opens on top of you
+// would otherwise fire on the same frame it appeared, taking the choice before it was
+// shown - which is the whole point of the door row.
+const DOOR_ARM_DISTANCE = 90
 // How far in from the wall a shaped room's entry drops the player, and how wide a patch
 // around them is kept clear of obstacles - the shaped-room answer to the rectangle's
 // doorway channel.
@@ -194,12 +202,14 @@ const BASE_STATS = {
   maxHp: MAX_HP,
   fireCooldown: FIRE_COOLDOWN,
   moveSpeed: PLAYER_SPEED,
-  damage: 1
+  damage: 1,
+  expPerKill: EXP_PER_KILL
 }
 
-// Enemy toughness scales with the 'enemy' curse, which cursed rewards now actually apply.
-function enemyHpFor(enemyStrength) {
-  return ENEMY_BASE_HP + enemyStrength
+// Enemy toughness comes off the door's tier and nothing else, now that the curse system
+// that used to stack on top of it is gone.
+function enemyHpFor(strengthBonus) {
+  return ENEMY_BASE_HP + strengthBonus
 }
 
 export class PlayScene extends Phaser.Scene {
@@ -495,6 +505,7 @@ export class PlayScene extends Phaser.Scene {
     }
 
     this.checkRoomCleared()
+    this.updateDoorArming()
     this.updateMovement()
     this.updateEnemies(time)
     this.updateEnemyPings()
@@ -877,7 +888,7 @@ export class PlayScene extends Phaser.Scene {
       0xef4444
     )
     this.physics.add.existing(enemy)
-    enemy.hp = enemyHpFor(this.gameState.enemyStrength + this.roomPlan.enemyStrengthBonus)
+    enemy.hp = enemyHpFor(this.roomPlan.enemyStrengthBonus)
     enemy.nextShotAt = this.time.now + ENEMY_FIRE_COOLDOWN
     this.enemies.add(enemy)
   }
@@ -890,7 +901,7 @@ export class PlayScene extends Phaser.Scene {
     const slug = this.add.rectangle(spawn.x, spawn.y, ENEMY_SIZE, ENEMY_SIZE, SLUG_COLOR)
 
     this.physics.add.existing(slug)
-    slug.hp = enemyHpFor(this.gameState.enemyStrength + this.roomPlan.enemyStrengthBonus)
+    slug.hp = enemyHpFor(this.roomPlan.enemyStrengthBonus)
     slug.isSlug = true
     slug.nextShotAt = Infinity
     this.enemies.add(slug)
@@ -1009,7 +1020,7 @@ export class PlayScene extends Phaser.Scene {
   killEnemy(enemy) {
     const { x, y } = enemy
     enemy.destroy()
-    addExp(this.gameState, EXP_PER_KILL)
+    addExp(this.gameState, this.stats.expPerKill)
 
     if (rollEnemyDrop(Math.random) === HEAL_DROP) {
       this.spawnHealPickup(x, y)
@@ -1156,7 +1167,6 @@ export class PlayScene extends Phaser.Scene {
     this.addPickup(spot.x, spot.y, {
       kind: 'dropped',
       item,
-      isCursed: false,
       color: PICKUP_DROPPED_COLOR,
       declined: true
     })
@@ -1190,19 +1200,17 @@ export class PlayScene extends Phaser.Scene {
     this.addPickup(x, y, {
       kind: 'treasure',
       item: this.rollFrom([...itemsFrom('treasure'), ...itemsFrom('reward')]),
-      isCursed: false,
       color: PICKUP_TREASURE_COLOR
     })
   }
 
-  // The risky room's payout, and the only way into the debuff pool. It goes through
-  // grantItem like any other item rather than through takeReward: there is no curse roll
-  // to make, because the item *is* the curse. Purple, the colour a curse has always been.
+  // The risky room's payout, and the only way into the debuff pool. Purple, the colour a
+  // curse has always been - though what it hands over is a bargain rather than a
+  // punishment: every one of them carries a real upside alongside its cost.
   spawnDebuffPickup(x, y) {
     this.addPickup(x, y, {
       kind: 'debuff',
       item: this.rollFrom(itemsFrom('debuff')),
-      isCursed: false,
       color: PICKUP_CURSED_COLOR
     })
   }
@@ -1494,11 +1502,36 @@ ${advertised.tier}`, {
       repeat: -1
     })
 
-    const door = { advertised, actual, pad, text, pulse }
+    // Unarmed until the player is clear of it - see updateDoorArming. A door that opened
+    // under the player's feet would otherwise be taken on the frame it appeared.
+    const door = { advertised, actual, pad, text, pulse, armed: false }
 
     this.physics.add.overlap(this.player, pad, () => this.takeDoor(door), null, this)
 
     return door
+  }
+
+  // A door only becomes takeable once the player has been clear of it, so the choice is
+  // always shown before it can be made. The same idea as the pickup re-arm rule: standing
+  // where something appears must not count as reaching for it. A door that opens across
+  // the room arms on its first frame, so this costs nothing in the ordinary case.
+  updateDoorArming() {
+    this.doors.forEach((door) => {
+      if (door.armed) {
+        return
+      }
+
+      const gap = Phaser.Math.Distance.Between(
+        this.player.x,
+        this.player.y,
+        door.pad.x,
+        door.pad.y
+      )
+
+      if (gap > DOOR_ARM_DISTANCE) {
+        door.armed = true
+      }
+    })
   }
 
   // Evenly spaced across the top of the room, the same idea as the shop shelf, each pad
@@ -1536,10 +1569,19 @@ ${advertised.tier}`, {
 
   // Snapped to the nearest cell the player can actually stand on, so a door never opens
   // inside a rock or hard against a wall.
-  nearestFreePoint(x, y) {
+  // Three candidates, in order of preference: a cell with room around it within reach of
+  // where we aimed; failing that any open cell within reach, because a door pressed up
+  // against a rock is still a door on the wall; and only then the nearest roomy cell at
+  // any distance, which is what this used to do unconditionally and what put pads in the
+  // middle of the arena.
+  nearestFreePoint(x, y, limit = DOOR_SNAP_LIMIT) {
     const target = new Phaser.Math.Vector2(x, y)
-    let best = null
-    let bestDistance = Infinity
+    let roomyNear = null
+    let roomyNearAt = Infinity
+    let anyNear = null
+    let anyNearAt = Infinity
+    let roomyAnywhere = null
+    let roomyAnywhereAt = Infinity
 
     for (let row = 1; row < this.rows - 1; row++) {
       for (let col = 1; col < this.cols - 1; col++) {
@@ -1549,22 +1591,34 @@ ${advertised.tier}`, {
 
         const point = this.centreOf([row, col])
         const distance = Phaser.Math.Distance.BetweenPoints(point, target)
+        const roomy = this.hasClearance(row, col)
 
-        if (distance < bestDistance && this.hasClearance(row, col)) {
-          best = point
-          bestDistance = distance
+        if (roomy && distance < roomyAnywhereAt) {
+          roomyAnywhere = point
+          roomyAnywhereAt = distance
+        }
+        if (distance > limit) {
+          continue
+        }
+        if (distance < anyNearAt) {
+          anyNear = point
+          anyNearAt = distance
+        }
+        if (roomy && distance < roomyNearAt) {
+          roomyNear = point
+          roomyNearAt = distance
         }
       }
     }
 
-    return best ?? target
+    return roomyNear ?? anyNear ?? roomyAnywhere ?? target
   }
 
   // Physics keeps firing the overlap while the player stands in it, and scene.restart()
   // does not take effect until the end of the tick - so this has to be one-shot. The
   // doors not taken are torn down first: the choice is made, there is no walking back.
   takeDoor(door) {
-    if (this.leaving) {
+    if (this.leaving || !door.armed) {
       return
     }
 
@@ -1626,8 +1680,8 @@ ${advertised.tier}`, {
     return pickup
   }
 
-  // Touching a pickup takes it - the take/skip choice is still to come, so a cursed
-  // reward is shown in purple and the only way to skip one is to walk around it.
+  // Touching a pickup takes it - the take/skip choice is still to come, so a debuff is
+  // shown in purple and the only way to skip one is to walk around it.
   onPickup(player, pickup) {
     // declined pickups and items just dropped underfoot stay inert until stepped off
     if (this.swap || pickup.spec.declined) {
@@ -1644,14 +1698,12 @@ ${advertised.tier}`, {
       return
     }
 
-    const { kind, item, isCursed } = pickup.spec
+    const { kind, item } = pickup.spec
 
-    // only a reward carries a curse and counts toward rewardsCollected; treasure and
-    // items the player dropped themselves go straight into the rack
-    const result =
-      kind === 'reward'
-        ? takeReward(this.gameState, { isCursed, item }, Math.random)
-        : grantItem(this.gameState, item)
+    // Every pickup goes into the rack the same way. There used to be a second path for a
+    // reward, which counted itself and rolled a curse; the debuff items carry their own
+    // cost in their own stat fields now, so there is nothing extra to charge.
+    const result = grantItem(this.gameState, item)
 
     // Already held: nothing was placed and no curse was paid, so the pickup is left in
     // the room rather than eaten for nothing - swap something out and it can be taken.
@@ -1681,12 +1733,14 @@ ${advertised.tier}`, {
       this.dropItem(result.displaced)
     }
 
-    // A debuff is announced in the curse colour and named as what it is. It is the one
-    // pickup the player would rather have walked around, so it should not read like a gift.
-    const cursed = isCursed || kind === 'debuff'
-    const note = kind === 'debuff' ? ' (DEBUFF)' : isCursed ? ' (CURSED)' : ''
+    // A debuff is announced in the curse colour and named as what it is - it carries a
+    // cost as well as a gift, and the toast should not read like an unqualified win.
+    const debuff = kind === 'debuff'
 
-    this.toast(`${item.name}: ${item.effect}${note}`, cursed ? '#c084fc' : '#67e8f9')
+    this.toast(
+      `${item.name}: ${item.effect}${debuff ? ' (DEBUFF)' : ''}`,
+      debuff ? '#c084fc' : '#67e8f9'
+    )
     console.log('[one-bomb-left] picked up', item.id, 'stats', this.stats)
   }
 
@@ -2020,7 +2074,7 @@ ${advertised.tier}`, {
     this.physics.pause()
     this.swap = { item, pickup, count: slots.length, objects: [] }
 
-    const cursed = pickup.spec.isCursed
+    const debuff = pickup.spec.kind === 'debuff'
     const rows = [
       {
         text: 'ACTIVE SLOTS FULL',
@@ -2028,9 +2082,9 @@ ${advertised.tier}`, {
         color: '#fbbf24',
         gap: 44
       },
-      { text: item.name, size: 22, color: cursed ? '#c084fc' : '#67e8f9', gap: 27 },
+      { text: item.name, size: 22, color: debuff ? '#c084fc' : '#67e8f9', gap: 27 },
       {
-        text: item.effect + (cursed ? '   (CURSED)' : ''),
+        text: item.effect + (debuff ? '   (DEBUFF)' : ''),
         size: 15,
         color: '#cbd5e1',
         gap: 42
@@ -2103,13 +2157,8 @@ ${advertised.tier}`, {
 
   confirmSwap(slotIndex) {
     const { item, pickup } = this.swap
-    const { kind, isCursed } = pickup.spec
+    const debuff = pickup.spec.kind === 'debuff'
     const displaced = applySwap(this.gameState, item, slotIndex)
-
-    // the reward is only charged for now that the item is actually placed
-    if (kind === 'reward') {
-      collectReward(this.gameState, { isCursed }, Math.random)
-    }
 
     pickup.destroy()
     this.closeSwapPrompt()
@@ -2120,7 +2169,7 @@ ${advertised.tier}`, {
     }
 
     const dropNote = displaced ? ' - dropped ' + displaced.name : ''
-    this.toast('slot ' + (slotIndex + 1) + ': ' + item.name + dropNote, isCursed ? '#c084fc' : '#67e8f9')
+    this.toast('slot ' + (slotIndex + 1) + ': ' + item.name + dropNote, debuff ? '#c084fc' : '#67e8f9')
   }
 
   declineSwap() {

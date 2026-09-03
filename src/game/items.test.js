@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest'
+import { computeStats } from './effects.js'
+import { createInventory } from './inventory.js'
 import {
   ACTIVE_ITEMS,
   DEBUFF_ITEMS,
@@ -122,25 +124,106 @@ describe('debuff items', () => {
     DEBUFF_ITEMS.forEach((item) => expect(safe).not.toContain(item.id))
   })
 
-  // Each one has to actually do something, and the fields are what computeStats reads.
-  test('each one carries the field that makes it hurt', () => {
+  // The fields are what computeStats reads, so the pairing has to be in the data.
+  test('each one carries both the field that helps and the field that hurts', () => {
+    expect(getItem('rusty_grip').damageBonus).toBe(1)
     expect(getItem('rusty_grip').fireRateMultiplier).toBeLessThan(1)
+
+    expect(getItem('sluggish').maxHpBonus).toBe(1)
     expect(getItem('sluggish').moveSpeedMultiplier).toBeLessThan(1)
+
+    expect(getItem('thin_skin').moveSpeedMultiplier).toBeGreaterThan(1)
     expect(getItem('thin_skin').maxHpBonus).toBeLessThan(0)
+
+    expect(getItem('slug_step').expPerKillBonus).toBe(1)
     expect(getItem('slug_step').spawnsSlug).toBe(true)
   })
 
-  test('none of them is secretly a buff', () => {
+  // Each one is a bargain, not a punishment: it has to give something as well as take
+  // something, or a risky door is a fight you are paid nothing for.
+  test('each one carries a bonus as well as a cost', () => {
+    const bonuses = {
+      rusty_grip: (item) => item.damageBonus > 0,
+      sluggish: (item) => item.maxHpBonus > 0,
+      thin_skin: (item) => item.moveSpeedMultiplier > 1,
+      slug_step: (item) => item.expPerKillBonus > 0
+    }
+    const costs = {
+      rusty_grip: (item) => item.fireRateMultiplier < 1,
+      sluggish: (item) => item.moveSpeedMultiplier < 1,
+      thin_skin: (item) => item.maxHpBonus < 0,
+      slug_step: (item) => item.spawnsSlug === true
+    }
+
     DEBUFF_ITEMS.forEach((item) => {
-      expect(item.maxHpBonus ?? 0).toBeLessThanOrEqual(0)
-      expect(item.damageBonus ?? 0).toBeLessThanOrEqual(0)
-      expect(item.moveSpeedMultiplier ?? 1).toBeLessThanOrEqual(1)
-      expect(item.fireRateMultiplier ?? 1).toBeLessThanOrEqual(1)
-      expect(item.fireCooldownBonus ?? 0).toBeGreaterThanOrEqual(0)
+      expect(bonuses[item.id](item)).toBe(true)
+      expect(costs[item.id](item)).toBe(true)
     })
+  })
+
+  test('the effect line names both halves of the bargain', () => {
+    DEBUFF_ITEMS.forEach((item) => expect(item.effect).toMatch(/,|but/))
   })
 
   test('none of them carries a cooldown, so nothing treats one as an active', () => {
     DEBUFF_ITEMS.forEach((item) => expect(item.cooldown).toBeUndefined())
+  })
+})
+
+// A 0-1 figure the boss system will read to decide what an item is worth. **Nothing
+// consumes it yet** - these tests exist so the data is correct and complete on the day
+// something does, rather than being discovered wrong then.
+describe('bonusWeight', () => {
+  // Hair Trigger's weight is being set deliberately rather than guessed at. When it is
+  // assigned, delete it from here - the second test below fails until you do, which is
+  // the point: the hole should not be able to go quiet.
+  const PENDING_BONUS_WEIGHT = ['hair_trigger']
+
+  test('every item that has been given a weight has a sane one', () => {
+    ITEMS.filter((item) => !PENDING_BONUS_WEIGHT.includes(item.id)).forEach((item) => {
+      expect(typeof item.bonusWeight, item.id).toBe('number')
+      expect(item.bonusWeight, item.id).toBeGreaterThan(0)
+      expect(item.bonusWeight, item.id).toBeLessThanOrEqual(1)
+    })
+  })
+
+  test('the only items still missing a weight are the ones known to be pending', () => {
+    const missing = ITEMS.filter((item) => item.bonusWeight === undefined).map((item) => item.id)
+
+    expect(missing).toEqual(PENDING_BONUS_WEIGHT)
+  })
+
+  test('carries the weights that were specified, item by item', () => {
+    const expected = {
+      heavy_vest: 0.4,
+      iron_plating: 0.2,
+      twitchy_trigger: 0.3,
+      steady_boots: 0.25,
+      sharp_rounds: 0.35,
+      rusty_grip: 0.3,
+      sluggish: 0.2,
+      thin_skin: 0.25,
+      slug_step: 0.15,
+      panic_button: 0.5,
+      second_wind: 0.3,
+      bulwark: 0.4,
+      repair_kit: 0.35
+    }
+
+    Object.entries(expected).forEach(([id, weight]) =>
+      expect(getItem(id).bonusWeight, id).toBe(weight)
+    )
+  })
+
+  // It is inert on purpose: nothing should have started reading it behind our backs.
+  test('changes no stat, being data for a system that does not exist yet', () => {
+    const base = { maxHp: 6, fireCooldown: 180, moveSpeed: 320, damage: 1, expPerKill: 2 }
+    const withWeight = createInventory()
+    const withoutWeight = createInventory()
+
+    withWeight.passives.push({ ...getItem('iron_plating') })
+    withoutWeight.passives.push({ ...getItem('iron_plating'), bonusWeight: undefined })
+
+    expect(computeStats(base, withWeight)).toEqual(computeStats(base, withoutWeight))
   })
 })
