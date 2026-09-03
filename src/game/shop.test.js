@@ -238,14 +238,15 @@ describe('shelfLabelFor', () => {
     })
   })
 
-  it('shows the tier instead, which the price already implies', () => {
-    expect(shelfLabelFor({ kind: 'item', item: getItem('heavy_vest') })).toContain('TRINKET')
-    expect(shelfLabelFor({ kind: 'item', item: getItem('iron_plating') })).toContain('PASSIVE')
-    expect(shelfLabelFor({ kind: 'item', item: getItem('panic_button') })).toContain('ACTIVE')
+  // A catalogue item writes nothing above its price: its icon is on the shelf and says
+  // which item it is, so a word there would be repeating the picture. The label used to
+  // read `PASSIVE  ?`, from when the shop sold blind.
+  it('writes nothing above the price for a catalogue item', () => {
+    ITEMS.forEach((item) => expect(shelfLabelFor({ kind: 'item', item })).toBe(''))
   })
 
-  it('marks a catalogue item as unknown', () => {
-    ITEMS.forEach((item) => expect(shelfLabelFor({ kind: 'item', item })).toContain('?'))
+  it('no longer labels stock as an unknown', () => {
+    ITEMS.forEach((item) => expect(shelfLabelFor({ kind: 'item', item })).not.toContain('?'))
   })
 
   // The refills are not items: there is nothing to find out, and hiding them would make a
@@ -255,14 +256,16 @@ describe('shelfLabelFor', () => {
     expect(shelfLabelFor(BOMB_REFILL)).toBe(BOMB_REFILL.name)
   })
 
-  it('labels every entry a real shelf can hold', () => {
-    const stock = rollShopStock(POOL, rng(0, 0, 0, 0))
+  it('returns a string for every entry a real shelf can hold', () => {
+    Array.from({ length: 100 }, () => rollShopStock(POOL, Math.random)).forEach((stock) =>
+      stock.forEach((entry) => expect(typeof shelfLabelFor(entry)).toBe('string'))
+    )
+  })
 
-    stock.forEach((entry) => {
-      const label = shelfLabelFor(entry)
-
-      expect(typeof label).toBe('string')
-      expect(label.length).toBeGreaterThan(0)
-    })
+  // The identity is on the shelf now; the exact effect is still what the purchase buys.
+  it('still never shows a catalogue item effect', () => {
+    ITEMS.forEach((item) =>
+      expect(shelfLabelFor({ kind: 'item', item })).not.toContain(item.effect)
+    )
   })
 })

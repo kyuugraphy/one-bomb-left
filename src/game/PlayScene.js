@@ -1345,15 +1345,21 @@ export class PlayScene extends Phaser.Scene {
       kind: 'shop',
       entry,
       price,
+      // Catalogue stock hands its item up so addPickup can draw the icon. onPickup
+      // branches on kind === 'shop' before it ever reads spec.item, so this changes
+      // nothing about how buying works.
+      item: entry.kind === 'item' ? entry.item : undefined,
       color: colors[entry.kind]
     })
 
     // The price rides under the box: a shop only works if the cost is visible before you
-    // walk into it, and there is no room for it inside a 24 px pickup. Name over price on
-    // two lines, so a long refill name stays inside its own slot on the shelf. What sits
-    // above the price is the tier, not the name - see shelfLabelFor.
+    // walk into it, and there is no room for it inside a 24 px pickup. A refill puts its
+    // name on the line above; a catalogue item has no line above at all, because its icon
+    // is already saying which item it is - see shelfLabelFor.
+    const label = shelfLabelFor(entry)
+
     pickup.spec.priceTag = this.add
-      .text(spot.x, spot.y + PICKUP_SIZE, `${shelfLabelFor(entry)}\n${price} EXP`, {
+      .text(spot.x, spot.y + PICKUP_SIZE, label ? `${label}\n${price} EXP` : `${price} EXP`, {
         fontFamily: 'monospace',
         fontSize: '13px',
         color: '#e2e8f0',
@@ -1761,18 +1767,16 @@ ${advertised.tier}`, {
   }
 
   addPickup(x, y, spec) {
-    // An item on the floor wears its own icon, so what you picked up and what is later
-    // listed in the pause menu are recognisably the same thing. The kind colour does not
-    // go to waste: it becomes the outline, so a debuff still reads as purple-edged and a
-    // safe drop as gold-edged while the fill says which item it is.
+    // Anything carrying an item wears that item's icon - on the floor and on a shop shelf
+    // alike - so what you are looking at, what you picked up, and what is later listed in
+    // the pause menu are recognisably the same thing. The kind colour does not go to
+    // waste: it becomes the outline, so a debuff reads purple-edged, a safe drop
+    // gold-edged and shop stock blue-edged, while the fill says which item it is.
     //
-    // Shop stock is the exception and stays an anonymous box: the shelf deliberately sells
-    // blind - see shelfLabelFor - and an icon there would give the game away. Heals and
-    // refills carry no item at all, so they keep the plain box they always had.
-    const pickup =
-      spec.item && spec.kind !== 'shop'
-        ? this.drawItemIcon(x, y, spec.item, PICKUP_SIZE, spec.color).setStrokeStyle(3, spec.color)
-        : this.add.rectangle(x, y, PICKUP_SIZE, PICKUP_SIZE, spec.color).setStrokeStyle(2, ICON_EDGE_COLOR)
+    // Heals and refills carry no item, so they keep the plain box they always had.
+    const pickup = spec.item
+      ? this.drawItemIcon(x, y, spec.item, PICKUP_SIZE, spec.color).setStrokeStyle(3, spec.color)
+      : this.add.rectangle(x, y, PICKUP_SIZE, PICKUP_SIZE, spec.color).setStrokeStyle(2, ICON_EDGE_COLOR)
 
     pickup.spec = spec
 

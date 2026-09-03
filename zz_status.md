@@ -4,7 +4,10 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, eleventh pass) — the shop rolls all three slots
+## Latest session (2026-09-03, twelfth pass) — the shop shows what it is selling
+Shelf stock wears the item's own icon now, in place of the `PASSIVE  ?` labels. The price stays; the name and the exact effect still wait for the purchase to land. **This reverses the "shop sells blind" call from two passes ago**: spending a real resource deserves an informed choice, while the exact numbers are a surprise worth keeping.
+
+## Previous session (2026-09-03, eleventh pass) — the shop rolls all three slots
 A shelf used to be one rolled catalogue item and both refills, every single time — two of its three slots never varied. All three are drawn from one pool now, so a shop can be three items, or two and a refill, or a refill and two items. **The refills are entries in that draw, not fixtures.**
 
 ## Previous session (2026-09-03, tenth pass) — placeholder item icons
@@ -454,7 +457,7 @@ Debuffs get their own shape rather than the circle their tier would imply: they 
 
 The four shapes were picked for **needing no base rotation**, so the pickup reveal can spin one through 360 degrees and set it back to 0 without leaving it crooked. `drawItemIcon(x, y, item, size, edgeColor)` is the only place any of them is drawn, and it hands back a Shape — so the caller can give it a physics body, tween it, or leave it sitting in a menu.
 
-**On the floor**, an item wears its own icon and the *kind* colour becomes the outline: a debuff still reads as purple-edged and a safe drop as gold-edged, while the fill says which item it is. **Shop stock is the exception** and stays an anonymous box, because the shelf deliberately sells blind — see `shelfLabelFor`, and an icon there would give the game away. Heals and refills carry no item and keep the plain box they always had.
+**Anything carrying an item wears that item's icon**, on the floor and on a shop shelf alike, and the *kind* colour becomes the outline: a debuff reads purple-edged, a safe drop gold-edged, shop stock blue-edged, while the fill says which item it is. Heals and refills carry no item and keep the plain box they always had.
 
 **In the pause menu**, the row of names and effects is gone. The icons are laid out nine to a line with an `xN` beside any stack. The names were never the point: they are in the notice line when you pick one up, and a wall of text was a worse answer to "what am I running" than a row of shapes.
 
@@ -538,6 +541,22 @@ The safe payout pools **treasure and reward together**. Treasure lost its only s
 
 Sampled 5,000 rolls: all four types come up about evenly (3,072-3,182 each), the 2-3 door split is unchanged, and `combat_heavy` never appears.
 
+### What a shelf gives away
+The shelf shows the item's **icon** and its **price**, and nothing else. `shelfLabelFor` returns the empty string for a catalogue item — its icon is already saying which item it is, so a word above the price would be repeating the picture — and the refill's own name for a refill, which is not an item and has nothing to find out about.
+
+It read `PASSIVE  ?` before, from a pass where the shop deliberately sold blind. **That call is reversed.** Spending EXP is committing a real resource, and a purchase you cannot identify is a slot machine rather than a decision; the exact effect text is a fine thing to hold back, the identity is not. What still waits for the purchase is the name and the effect line, which arrive together at the end of the same reveal beat a floor pickup uses.
+
+This needed three changes beyond the label function:
+
+- **The price tag composes conditionally.** With the label empty, `label
+price` would have left a blank first line, so it is `label ? label + newline + price : price`.
+- **Shop stock carries its item.** `spawnShopPickup` puts `entry.item` on the pickup spec so `addPickup` can find it. `onPickup` branches on `kind === 'shop'` before it ever reads `spec.item`, so nothing about buying changed.
+- **`addPickup` stopped excluding shop pickups** from the icon path. The condition was `spec.item && spec.kind !== 'shop'`; it is now just `spec.item`.
+
+**The reveal beat needed nothing.** `buyFromShop` already routed catalogue items through `beginReveal` and refills straight to `completePurchase`. Confirmed by measurement rather than by reading: during the beat, EXP unspent, stats untouched, and neither the name nor the effect on screen; at the end, `bought Bulwark: shrug off every hit for 2.5s (-7 EXP)`, 7 EXP gone and the item in the rack. A Bomb Refill still buys with no beat at all.
+
+Verified on a live shelf: an indigo triangle at 7 EXP, an orange circle at 10, an emerald circle at 10 — every icon matching its item's shape and colour, every outline the shop blue, no label leaking a name or an effect, and `Bomb Refill` still written out in full when one is stocked.
+
 ### Shop shelf: three slots, all of them rolled
 `SHELF_SIZE = 3`. It used to roll 3-4 catalogue items **on top of** both refills, so a shelf was five or six wide — and since a visit buys exactly one thing, the extra width was only ever more options to discard.
 
@@ -598,7 +617,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 18 files, 349 tests, green.
+- `npx vitest run` → 18 files, 350 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
