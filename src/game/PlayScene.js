@@ -3,14 +3,15 @@ import { cooldownRemaining, triggerActive } from './actives.js'
 import { addExp, spendExp } from './currency.js'
 import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
-import { countOwned, createInventory, hasSetBonus, passiveCounts } from './inventory.js'
+import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
 import { collectReward, takeReward } from './rewards.js'
 import { canAfford, priceOf, rollShopStock } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
+import { freshGameState, roomFor } from './run.js'
 import { rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
-import { ROOM_SHAPES } from './shapes.js'
+import { ROOM_SHAPES, rollRoomShape } from './shapes.js'
 import {
   cellCentre,
   doorCells,
@@ -90,9 +91,6 @@ const EXIT_SIZE = CELL - 8
 // Doors sit along the top of the room, clear of the walls, spread like the shop shelf.
 const DOOR_MARGIN = WALL_THICKNESS + 90
 const DOOR_ROW_Y = CELL * 1.5
-// The room a run starts in: one enemy, nothing cursed. No door chose it, so
-// it is spelled out rather than rolled.
-const ENTRANCE_DOOR = { type: 'safe_reward', tier: 'easy' }
 // How far in from the wall a shaped room's entry drops the player, and how wide a patch
 // around them is kept clear of obstacles - the shaped-room answer to the rectangle's
 // doorway channel.
@@ -190,18 +188,6 @@ function enemyHpFor(enemyStrength) {
   return ENEMY_BASE_HP + enemyStrength
 }
 
-function freshGameState() {
-  return {
-    riskLevel: 0,
-    enemyStrength: 0,
-    rewardsCollected: 0,
-    exp: 0,
-    bombCount: 0,
-    inventory: createInventory(),
-    cooldowns: {}
-  }
-}
-
 export class PlayScene extends Phaser.Scene {
   constructor() {
     super('play')
@@ -210,12 +196,15 @@ export class PlayScene extends Phaser.Scene {
   // A restart hands the next room the plan the chosen door resolved to, plus the state
   // to keep. Plain restart() passes nothing and starts a fresh run in the entrance room.
   init(data) {
-    this.roomPlan = data?.plan ?? roomPlanFor(ENTRANCE_DOOR)
-    this.roomType = this.roomPlan.roomType
-    this.carried = data?.carried ?? null
-    // A room is a rectangle unless it is handed a shape id. Nothing rolls one yet - only
-    // the debug key sets it - so every room reached by a door is still 24x15.
-    this.shape = data?.shape ? ROOM_SHAPES[data.shape] : null
+    // Everything about which room this is comes out of the payload in one place, so
+    // "continue the run" and "start a new one" are one decision rather than four.
+    const room = roomFor(data)
+
+    this.roomPlan = room.plan
+    this.roomType = room.roomType
+    this.shape = room.shapeId ? ROOM_SHAPES[room.shapeId] : null
+    this.gameState = room.gameState
+    this.startHealth = room.health
   }
 
   create() {
@@ -229,11 +218,10 @@ export class PlayScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, width, height)
     this.cameras.main.setBounds(0, 0, width, height)
 
-    this.gameState = this.carried?.gameState ?? freshGameState()
     this.stats = computeStats(BASE_STATS, this.gameState.inventory)
     this.nextFireAt = 0
     this.nextHitAt = 0
-    this.health = this.carried?.health ?? this.stats.maxHp
+    this.health = this.startHealth ?? this.stats.maxHp
     this.gameOver = false
 
     this.doors = []
@@ -1485,8 +1473,17 @@ ${advertised.tier}`, {
     this.leaving = true
     this.doors.forEach((other) => this.closeDoor(other))
 
+    const plan = roomPlanFor(door.actual)
+    this.gameState.roomNumber += 1
+
     this.scene.restart({
-      plan: roomPlanFor(door.actual),
+      plan,
+      // A shop lays its stock along one line and needs bare floor to do it, so it stays a
+      // rectangle however deep the run is - see shelfSpots, which measures in screens.
+      shape:
+        plan.roomType === 'shop'
+          ? null
+          : rollRoomShape(this.gameState.roomNumber, Math.random),
       carried: { gameState: this.gameState, health: this.health }
     })
   }
@@ -1887,8 +1884,10 @@ ${advertised.tier}`, {
       slot.box.setStrokeStyle(2, cooling ? SLOT_FILLED_EDGE : SLOT_READY_EDGE)
     })
 
+    // How deep the run is, beside the wallet. Big rooms only happen in a band of the run,
+    // so "which room is this" stopped being trivia the moment the band existed.
     this.hudExpText.setText(
-      `EXP ${this.gameState.exp}   BOMBS ${this.gameState.bombCount}`
+      `ROOM ${this.gameState.roomNumber}   EXP ${this.gameState.exp}   BOMBS ${this.gameState.bombCount}`
     )
     // Asked of the inventory rather than inferred from damage > 1: stacked passives raise
     // damage on their own now, so that test lit the readout up with no set equipped.
@@ -2174,11 +2173,10 @@ ${advertised.tier}`, {
     }
 
     // There is no title screen to exit to yet, so Exit abandons the run and starts a new
-    // one from a fresh combat room - restart() with no carried state, which is what the
-    // game-over R key already does. It is behind a highlight-then-ENTER, so it cannot be
-    // hit by a stray keypress. Point it at a menu scene once one exists.
+    // one from the entrance room. It is behind a highlight-then-ENTER, so it cannot be hit
+    // by a stray keypress. Point it at a menu scene once one exists.
     this.closePauseMenu()
-    this.scene.restart()
+    this.startFreshRun()
   }
 
   closePauseMenu() {
@@ -2222,6 +2220,16 @@ ${advertised.tier}`, {
   // never moves and this changes nothing.
   pinToScreen(objects) {
     objects.forEach((object) => object.setScrollFactor(0))
+  }
+
+  // Throwing the run away, as against walking into the next room. The empty payload is
+  // load-bearing: `restart()` with no argument at all leaves the scene's stored data in
+  // place, so Phaser hands init() the *previous* room's { shape, plan, carried } back and
+  // the run everyone thought had ended carries on with its EXP, its items, its difficulty
+  // and its shape. Passing `{}` replaces that data, and roomFor() then falls back to a
+  // fresh game state and the entrance room.
+  startFreshRun() {
+    this.scene.restart({})
   }
 
   toast(message, color) {
@@ -2274,6 +2282,6 @@ ${advertised.tier}`, {
       .setOrigin(0.5)
       .setScrollFactor(0)
 
-    this.input.keyboard.once('keydown-R', () => this.scene.restart())
+    this.input.keyboard.once('keydown-R', () => this.startFreshRun())
   }
 }

@@ -1,10 +1,15 @@
 # one-bomb-left — Status
 
-_Last updated: 2026-09-02_
+_Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03)
+## Latest session (2026-09-03, second pass)
+**Big rooms are reachable by playing now, and the restart bug is fixed.** `rollRoomShape()` makes rooms 3 to 7 a coin flip between a rectangle and one of the four shapes, drawn evenly; rooms 1-2 and 8 onward stay rectangles, and a shop is always a rectangle whatever the depth. The run carries a `roomNumber`, shown in the HUD beside the wallet.
+
+`scene.restart()` with no argument was handing `init()` the previous room's payload back, so death and the pause menu's **Exit** resumed the run they claimed to end. Both now call `startFreshRun()`, which passes `{}`. `run.js` is new and holds `freshGameState()` and `roomFor()`, the seam that made "fresh run" versus "next room" testable at all.
+
+## Previous session (2026-09-03, first pass)
 **Off-screen enemy arrows for big rooms.** A big room is nearly three times the viewport, so most of its enemies start out of sight and the last one alive can be a forty-second walk away with nothing to say where. Every off-screen enemy now gets a small red arrow on the edge of the screen pointing at it, updated every frame, gone the moment it comes into view. `pings.js` is new and holds the one piece of arithmetic worth testing. Rectangular rooms get none of it - they cannot scroll, so nothing in them is ever off-screen.
 
 While checking it, found a **pre-existing restart bug**: `scene.restart()` with no arguments does not clear the scene's stored data, so "press R to try again" and the pause menu's **Exit** both resume the run they were meant to abandon. See Not done. Nothing to do with the arrows; the shape field just made it visible.
@@ -32,7 +37,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2279 lines)
+### Game loop (`src/game/PlayScene.js`, 2287 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, 1200 ms lifetime.
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
@@ -62,14 +67,15 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `currency.js` | `addExp`, `spendExp` | `exp` |
 | `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `priceOf`, `canAfford`, `rollShopStock` | none - rolls and prices, the scene applies them |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `DROP_KINDS` | none - rolls what a kill leaves behind |
-| `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
+| `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
+| `run.js` | `freshGameState`, `roomFor` | owns `gameState`'s shape; turns a restart payload into the room to build |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
 | `curses.js` | `applyCurse('risk' \| 'enemy')` | `riskLevel`, `enemyStrength` |
 | `rewards.js` | `takeReward`, `skipReward` | `rewardsCollected`, + curse on 50/50 roll |
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |
-| `shapes.js` | `ROOM_SHAPES`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS` | none - pure data; **all four are wired into the scene** |
+| `shapes.js` | `ROOM_SHAPES`, `rollRoomShape`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS`, `SHAPE_ROOM_*` | none - data plus the depth-band roll, RNG injected |
 | `shapeRoom.js` | `roomSize`, `cellCentre`, `innerCell`, `solidGrid`, `wallCells`, `wallRun`, `splitDoors`, `doorCells`, `DOOR_INSET` | none - reads a mask, returns grids, cells and world points; `splitDoors` takes an injected RNG |
 | `items.js` | `TRINKET_ITEMS`, `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
 | `effects.js` | `computeStats(base, inventory)` | none - returns a fresh stats object |
@@ -317,6 +323,28 @@ In every room the player landed exactly on the entry cell, and **no enemy, rock 
 
 Headless as well, 200 generations per shape: every open cell reachable from the entry every time, **no obstacle ever placed on void or wall**, coverage still topping out at the rolled 33%, and the wall ring sealed on all four (no open cell touching a non-floor cell).
 
+### Which rooms are big (`rollRoomShape` in `shapes.js`)
+A run is now `rectangle, rectangle, [coin flip x5], rectangle...`. Rooms **3 to 7** each roll a 50/50 between an ordinary 24x15 room and one of the four shapes, drawn evenly; everything outside that band is a rectangle. The band is deliberate rather than a placeholder for "everywhere": the first two rooms are where the game is learned and a space you can see all at once is the right place to learn it, and by the eighth room a run is long enough that a two-minute room every time would drag.
+
+- **The roll lives with the depth, not with the door.** `takeDoor` bumps `gameState.roomNumber` and rolls against the new number, so the band is a property of how deep the run is and survives whatever the door telegraph said.
+- **A shop is never a big room.** `shelfSpots` lays stock along one line measured in *screen* widths at a fixed fraction of the screen height - in a 2240 px room that line lands in the top-left corner, which for Z and T is void. Rather than teach the shelf about masks for a room type that wants bare floor anyway, a shop plan skips the roll.
+- **The HUD carries `ROOM n`** beside EXP and BOMBS. Without it the band is invisible: there was no way, in play, to know which room you were on.
+
+Verified in the browser over 8 full runs of 10 rooms: shapes appeared **only at rooms 3, 4, 6 and 7** - never at 1, 2, or 8 through 10 - all four shapes turned up, and **none of the 13 shops encountered was ever a big room**. (Room 5 happened not to roll one in this sample; it was a shop in half of those runs.) The distribution itself is pinned by unit tests rather than by the sample: both ends of the band included, both ends excluded by one, ~50% over 4,000 rolls, and all four ids reachable.
+
+### Fresh run vs. next room (`run.js`)
+`scene.restart()` with **no argument at all** does not clear a scene's stored data - Phaser only replaces `settings.data` when you pass something - so `init()` received the previous room's `{ shape, plan, carried }` straight back. Everything that was supposed to be thrown away came with it. Measured before the fix, in a G big room with EXP set to 4242: the "new" run came up **still G, still `combat_heavy`/`medium`, still holding 4242 EXP**, and since `carried.gameState` is the same object, the inventory, the curses (`riskLevel`, `enemyStrength`), the bomb count and `rewardsCollected` all came back with it. Both `endGame()`'s "press R to try again" and the pause menu's **Exit** were affected; the Exit path even carried a comment saying it started a fresh run. Doors were never affected - `takeDoor` passes a payload, which replaces the stored one.
+
+The fix is one method, `startFreshRun()`, calling `restart({})`, used by both. The interesting part was making it testable: `run.js` now owns `freshGameState()` (moved out of `PlayScene`) and `roomFor(data)`, which turns a restart payload into the room to build. That puts "what does an empty payload mean" in a pure function, and `run.test.js` pins both halves - 24 tests:
+
+- **A fresh run banks and keeps nothing**: EXP 0, empty rack, curses and bombs cleared, back to room 1 and the entrance plan, no shape, and health left to the scene so it starts full. `{}`, `undefined` and `null` all read the same. It shares no object with the run that just ended, checked by mutating one and looking at the other.
+- **A door still carries everything**: the *same* `gameState` object comes through, EXP, items, curses and bombs intact, damage taken kept rather than healed, depth advanced, and the door's plan and shape applied. A payload with no `shape` reads as a rectangle mid-run, not as "start over" - and `health: 0` survives as 0 rather than being swallowed by a fallback.
+
+Verified end to end in the browser, driven through the real keys. Loaded a run to 250 EXP, 4 bombs, a trinket, a passive, `riskLevel` 3 and `enemyStrength` 2, standing in a G big room on room 4 with 5 HP:
+- **Death -> `R`**: back to room 1, 24x15, `safe_reward`/`easy`, 0 EXP, 0 bombs, empty rack, curses cleared, 6/6 HP.
+- **`ESC` -> `S` -> `ENTER` (Exit run)**: menu opened at Resume, moved to Exit, confirmed - same result, menu closed.
+- **An ordinary door from the same loaded state**: `gameState` carried by reference, EXP, items, curses, bombs and damage all kept, depth advanced by one.
+
 ### Off-screen enemy arrows (`pings.js`)
 A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of a room's six enemies are outside the camera, and the last one alive can be minutes of screen away. One small red triangle per off-screen enemy sits on a ring inset 30 px from the edge of the screen, positioned and rotated at the bearing from the camera's centre to that enemy, repainted every frame from `update()` and hidden the frame its enemy comes into view.
 
@@ -331,7 +359,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 18 files, 252 tests, green.
+- `npx vitest run` → 19 files, 278 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
@@ -342,9 +370,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
-- **Nothing rolls a shape.** A big room is only reachable through the debug `L` key: no door leads to one, and there is no rule yet for how often a run should hand out a big room or which shape.
 - **A big room can leave an enemy 40 s away.** G's longest route is 83 cells. Nothing is wrong with the pathing - it walks the whole way - and the off-screen arrows now at least say *where* the straggler is, but "clear the room" can still mean waiting on one enemy crossing a room and a half. A minimap, or a leash that pulls the last enemy in, is the next thing to try.
-- **`scene.restart()` with no arguments does not start a fresh run.** Phaser keeps the scene's stored `data` when `restart()` is called without any, so the last `{ shape, plan, carried }` handed to `init()` is handed back. Measured: set `exp` to 4242 in a G big room, call `restart()`, and the new scene comes up **still G, still `combat_heavy`/`medium`, still holding 4242 EXP**. That makes two things lie: `endGame()`'s "press R to try again" and the pause menu's **Exit**, whose comment says it "abandons the run and starts a new one from a fresh combat room". Both resume it instead. Doors are unaffected - `takeDoor` passes data, which replaces the stored object. The fix is to pass something explicit rather than nothing (`restart({})`), plus a test that a fresh run really is fresh. **Pre-existing - it arrived with the door system, not with the big rooms; the `shape` field only made it visible.**
 - **A big room's entry is a spawn point, not a doorway.** The mask's entry cell is part of the wall ring and stays solid; the player is placed two cells inside it. There is no opening drawn, so nothing marks where you came in - the same complaint the rectangular room's bottom doorway already has.
 - **The HUD no longer rides a wall band in a big room.** The bar and the item plates are pinned to the screen, which is right, but the room scrolls under them, so they sit over open floor rather than over the wall they were laid out on. Readable - they carry their own dark plates - but it is not the design.
 - **`bombs.js` is the last unwired module.** Everything else reaches the scene through `gameState`: curses arrive via cursed reward pickups, `enemyStrength` really does feed `enemyHpFor`, and `exp` is earned on kills and spent in shops. `bombCount` exists and the shop raises it, but `useBomb`/`refillBomb` are still uncalled.
@@ -434,5 +460,6 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [x] ~~Vary room density~~ — `obstacles.js`; coverage rolled 0-33% per room instead of a fixed quarter, empty rooms included.
 - [x] ~~Make drops rare~~ — `drops.js`; one kill in ten leaves a heal, a treasure or a reward, and rooms no longer start with treasure on the floor.
 - [x] ~~**Wire the big rooms into the scene**~~ — done for L: walls built from the mask, the mask fed to `generateObstacles` as the solid grid, the wall joined to the walk-line test so BFS routes round the concave corner, entry and exit doorways placed off the mask's own data, and the camera following the player. Z, T and G are still unreached.
-- [ ] **Reach the big rooms in play**: roll a shape instead of pressing `L`, and decide how often a run should hand out one and which shape.
+- [x] ~~**Reach the big rooms in play**~~ - `rollRoomShape()`; rooms 3-7 are a coin flip, the four shapes draw evenly, shops stay rectangular.
+- [ ] **Tune the big-room band.** 3-7 at 50/50 is a first guess made without a long run behind it: it can deal five big rooms in a row, or none at all, and nothing scales the band with how a run is going.
 - [ ] Rebalance the item economy around the 10% drop rate — four different actives is a long way off at 3.3% each.

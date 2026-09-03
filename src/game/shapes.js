@@ -27,6 +27,31 @@ export function doorCapacity(span) {
   return Math.min(MAX_DOORS, Math.floor((span + DOOR_GAP) / (DOOR_CELLS + DOOR_GAP)))
 }
 
+// Which shape a room gets, or null for an ordinary rectangle. Big rooms are a mid-run
+// event rather than the whole run: the first two rooms are where the game is learned, and
+// a space you can see all of at once is the right place to learn it; by the eighth a run
+// is long enough that a two-minute room every time would drag. In between, a room is a
+// coin flip, and when it comes up big the four shapes are an even draw.
+//
+// Note a miss costs one roll and a hit costs two - the same shape as resolveDoor().
+export const SHAPE_ROOM_FIRST = 3
+export const SHAPE_ROOM_LAST = 7
+export const SHAPE_ROOM_CHANCE = 0.5
+
+export function rollRoomShape(roomNumber, randomFn) {
+  if (roomNumber < SHAPE_ROOM_FIRST || roomNumber > SHAPE_ROOM_LAST) {
+    return null
+  }
+
+  if (randomFn() >= SHAPE_ROOM_CHANCE) {
+    return null
+  }
+
+  const ids = Object.keys(ROOM_SHAPES)
+
+  return ids[Math.floor(randomFn() * ids.length)]
+}
+
 export function shapeSize(shape) {
   return { rows: shape.mask.length, cols: shape.mask[0].length }
 }

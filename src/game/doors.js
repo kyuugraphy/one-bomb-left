@@ -85,6 +85,9 @@ const ROOM_PLANS = {
 // however many 'enemy' curses the player has collected - it does not replace them.
 const TIER_STRENGTH_BONUS = { easy: 0, medium: 1, hard: 2 }
 
+// The room a run starts in. No door chose it, so it is spelled out rather than rolled.
+export const ENTRANCE_DOOR = { type: 'safe_reward', tier: 'easy' }
+
 export function roomPlanFor({ type, tier }) {
   const spec = ROOM_PLANS[type]
 

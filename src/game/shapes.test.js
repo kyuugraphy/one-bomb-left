@@ -3,9 +3,13 @@ import {
   BASE_ROOM_CELLS,
   MAX_DOORS,
   ROOM_SHAPES,
+  SHAPE_ROOM_CHANCE,
+  SHAPE_ROOM_FIRST,
+  SHAPE_ROOM_LAST,
   doorCapacity,
   floorCells,
   isFloor,
+  rollRoomShape,
   shapeSize
 } from './shapes.js'
 
@@ -183,5 +187,92 @@ describe('exit capacity', () => {
     ;[ROOM_SHAPES.L, ROOM_SHAPES.Z].forEach((shape) => {
       expect(doorCapacity(shape.exits[0].span)).toBe(MAX_DOORS)
     })
+  })
+})
+
+describe('rollRoomShape', () => {
+  // A queued RNG, so every roll in a test is chosen rather than hoped for.
+  const rng = (...values) => {
+    let i = 0
+    return () => values[i++]
+  }
+  const ids = Object.keys(ROOM_SHAPES)
+  const rooms = (from, to) =>
+    Array.from({ length: to - from + 1 }, (_, i) => from + i)
+
+  it('leaves the rooms before the band as rectangles, whatever the roll says', () => {
+    rooms(1, SHAPE_ROOM_FIRST - 1).forEach((room) =>
+      expect(rollRoomShape(room, () => 0)).toBe(null)
+    )
+  })
+
+  it('leaves the rooms after the band as rectangles, whatever the roll says', () => {
+    rooms(SHAPE_ROOM_LAST + 1, SHAPE_ROOM_LAST + 6).forEach((room) =>
+      expect(rollRoomShape(room, () => 0)).toBe(null)
+    )
+  })
+
+  // The band is closed at both ends: room 3 and room 7 are in it, room 2 and room 8 are
+  // not. Off-by-one here would quietly move the whole feature by a room.
+  it('includes both ends of the band', () => {
+    expect(rollRoomShape(SHAPE_ROOM_FIRST, rng(0, 0))).toBe(ids[0])
+    expect(rollRoomShape(SHAPE_ROOM_LAST, rng(0, 0))).toBe(ids[0])
+    expect(rollRoomShape(SHAPE_ROOM_FIRST - 1, rng(0, 0))).toBe(null)
+    expect(rollRoomShape(SHAPE_ROOM_LAST + 1, rng(0, 0))).toBe(null)
+  })
+
+  it('is a rectangle on the miss side of the chance and a shape on the hit side', () => {
+    rooms(SHAPE_ROOM_FIRST, SHAPE_ROOM_LAST).forEach((room) => {
+      expect(rollRoomShape(room, rng(SHAPE_ROOM_CHANCE))).toBe(null)
+      expect(rollRoomShape(room, rng(SHAPE_ROOM_CHANCE - 0.001, 0))).not.toBe(null)
+    })
+  })
+
+  it('only ever names a shape that exists', () => {
+    for (let i = 0; i < 400; i++) {
+      const rolled = rollRoomShape(5, Math.random)
+
+      if (rolled !== null) {
+        expect(ROOM_SHAPES[rolled]).toBeDefined()
+      }
+    }
+  })
+
+  it('can reach all four shapes, evenly', () => {
+    const seen = {}
+
+    ids.forEach((_, index) => {
+      // second roll picks the shape: index/ids.length lands squarely on that id
+      const rolled = rollRoomShape(4, rng(0, index / ids.length))
+      seen[rolled] = true
+    })
+
+    expect(Object.keys(seen).sort()).toEqual([...ids].sort())
+  })
+
+  it('splits the band about evenly between shapes and rectangles', () => {
+    let shaped = 0
+    const runs = 4000
+
+    for (let i = 0; i < runs; i++) {
+      if (rollRoomShape(5, Math.random) !== null) {
+        shaped += 1
+      }
+    }
+
+    expect(shaped / runs).toBeGreaterThan(SHAPE_ROOM_CHANCE - 0.05)
+    expect(shaped / runs).toBeLessThan(SHAPE_ROOM_CHANCE + 0.05)
+  })
+
+  // Across a whole run the band is what varies: the opening and the deep rooms are
+  // always rectangles, so a run reads as "normal, normal, then who knows".
+  it('gives a run a shaped middle and rectangular ends', () => {
+    const run = rooms(1, 12).map((room) => rollRoomShape(room, () => 0) === null)
+
+    expect(run).toEqual([
+      true, true,
+      false, false, false, false, false,
+      true, true, true, true, true
+    ])
   })
 })
