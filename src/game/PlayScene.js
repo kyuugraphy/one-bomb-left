@@ -1,6 +1,12 @@
 import Phaser from 'phaser'
 import { cooldownRemaining, triggerActive } from './actives.js'
-import { BULLET_LIFETIME, BULLET_RANGE, BULLET_SPEED } from './bullets.js'
+import {
+  BULLET_LIFETIME,
+  BULLET_RANGE,
+  BULLET_SPEED,
+  ENEMY_SHOT_LIFETIME,
+  ENEMY_SHOT_RANGE
+} from './bullets.js'
 import { addExp, spendExp } from './currency.js'
 import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
@@ -38,7 +44,6 @@ const EXP_PER_KILL = 2
 const ENEMY_SHOT_SPEED = PLAYER_SPEED * 0.65
 const ENEMY_SHOT_RADIUS = 7
 const ENEMY_SHOT_COLOR = 0xfb923c
-const ENEMY_SHOT_LIFETIME = 4000
 const ENEMY_FIRE_COOLDOWN = 1400
 const ENEMY_MUZZLE_OFFSET = ENEMY_SIZE / 2 + ENEMY_SHOT_RADIUS
 const HIT_COOLDOWN = 600
@@ -481,7 +486,7 @@ export class PlayScene extends Phaser.Scene {
     this.updateMovement()
     this.updateEnemies(time)
     this.updateEnemyPings()
-    this.updateBullets()
+    this.updateProjectiles()
     this.updateFiring(time)
     this.updateActives(time)
     this.updatePickupRearm()
@@ -626,6 +631,7 @@ export class PlayScene extends Phaser.Scene {
     this.physics.add.existing(shot)
     shot.body.setVelocity(aim.x * ENEMY_SHOT_SPEED, aim.y * ENEMY_SHOT_SPEED)
     this.enemyShots.add(shot)
+    this.armRange(shot)
 
     this.time.delayedCall(ENEMY_SHOT_LIFETIME, () => shot.destroy())
   }
@@ -904,34 +910,40 @@ export class PlayScene extends Phaser.Scene {
     bullet.body.setVelocity(aim.x * BULLET_SPEED, aim.y * BULLET_SPEED)
     this.bullets.add(bullet)
 
-    // Measured from where it was last frame rather than from the muzzle, so a bullet
-    // accrues only while it is actually moving: physics stops during the swap prompt and
-    // the pause menu, and a shot held there should come out of it with its range intact.
-    bullet.travelled = 0
-    bullet.lastX = bullet.x
-    bullet.lastY = bullet.y
+    this.armRange(bullet)
 
     this.time.delayedCall(BULLET_LIFETIME, () => bullet.destroy())
   }
 
-  // Range is a baseline rule, not an item: every shot dies at BULLET_RANGE unless a wall,
-  // a rock or an enemy takes it first. The timeout in fire() outlives this by a factor of
-  // two and a half at the current speed and never gets to fire - see bullets.js, which
-  // holds that arithmetic and a test that says which limit is really in charge.
-  updateBullets() {
-    // slice: destroying inside the loop mutates the group's own child array
-    this.bullets.getChildren().slice().forEach((bullet) => {
-      bullet.travelled += Phaser.Math.Distance.Between(
-        bullet.lastX,
-        bullet.lastY,
-        bullet.x,
-        bullet.y
-      )
-      bullet.lastX = bullet.x
-      bullet.lastY = bullet.y
+  // Range is a baseline rule on both sides of the fight: a shot dies at its range unless a
+  // wall, a rock or something it hit takes it first. The timeouts in fire() and
+  // fireEnemyShot() outlive it by more than double at the shipped speeds and never get to
+  // fire - see bullets.js, which holds that arithmetic and the tests that keep it true.
+  updateProjectiles() {
+    this.trackRange(this.bullets, BULLET_RANGE)
+    this.trackRange(this.enemyShots, ENEMY_SHOT_RANGE)
+  }
 
-      if (bullet.travelled >= BULLET_RANGE) {
-        bullet.destroy()
+  // Distance is accrued from where a shot was last frame rather than measured from its
+  // muzzle. The two agree for anything flying straight, which these do - but accruing per
+  // frame means a shot only spends range while it is actually moving, and physics stops
+  // dead during the swap prompt and the pause menu. A shot held through a pause comes out
+  // of it with its reach intact rather than having quietly aged.
+  armRange(shot) {
+    shot.travelled = 0
+    shot.lastX = shot.x
+    shot.lastY = shot.y
+  }
+
+  trackRange(group, range) {
+    // slice: destroying inside the loop mutates the group's own child array
+    group.getChildren().slice().forEach((shot) => {
+      shot.travelled += Phaser.Math.Distance.Between(shot.lastX, shot.lastY, shot.x, shot.y)
+      shot.lastX = shot.x
+      shot.lastY = shot.y
+
+      if (shot.travelled >= range) {
+        shot.destroy()
       }
     })
   }

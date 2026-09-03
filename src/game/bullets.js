@@ -15,6 +15,17 @@ export const BULLET_RANGE = 336
 // player ever feels.
 export const BULLET_LIFETIME = 1200
 
+// Enemy shots carry the same reach, deliberately: a duel is symmetric, and a room where
+// the thing shooting back outranged you would make walking in the wrong move. It is its
+// own constant rather than a second use of BULLET_RANGE so that either side can be tuned
+// without the other silently following.
+export const ENEMY_SHOT_RANGE = BULLET_RANGE
+
+// The enemy's own backstop. It is even further from binding than the player's: an enemy
+// shot travels at 0.65 of the player's move speed - 208 px/s - and covers its range in
+// about 1.6 s, so 4 s is nearly two and a half times the room it needs.
+export const ENEMY_SHOT_LIFETIME = 4000
+
 // How long a bullet takes to cover its range, in milliseconds.
 export function rangeReachedAt(range = BULLET_RANGE, speed = BULLET_SPEED) {
   return (range / speed) * 1000

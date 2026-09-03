@@ -5,7 +5,7 @@ _Last updated: 2026-09-03_
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
 ## Latest session (2026-09-03, third pass)
-**Player shots now have a range: 336 px, six cells.** Distance is accumulated per bullet from where it was last frame, so a shot dies at the cap whatever else is going on - and only accrues while it is actually moving, which matters because physics stops during the swap prompt and the pause menu. The wall, rock and enemy hits are unchanged, and the old 1200 ms lifetime stays as a backstop it now never gets to use: at 700 px/s the cap is reached in **480 ms**, two and a half times inside it. `bullets.js` is new and holds that arithmetic with the tests that keep it honest.
+**Shots now have a range, on both sides: 336 px, six cells.** Distance is accumulated per bullet from where it was last frame, so a shot dies at the cap whatever else is going on - and only accrues while it is actually moving, which matters because physics stops during the swap prompt and the pause menu. The wall, rock and enemy hits are unchanged, and the old 1200 ms lifetime stays as a backstop it now never gets to use: at 700 px/s the cap is reached in **480 ms**, two and a half times inside it. `bullets.js` is new and holds that arithmetic with the tests that keep it honest. **Enemy shots carry the same cap**, through the same tracker - their 4 s timeout is even further from binding, since a 208 px/s shot crosses 336 px in about 1.6 s. One consequence to be aware of: enemies still *fire* from beyond their reach, because `hasShotLineTo` asks about rocks and never about distance, so a shot from across a room now evaporates partway. See Not done.
 
 ## Previous session (2026-09-03, second pass)
 **Big rooms are reachable by playing now, and the restart bug is fixed.** `rollRoomShape()` makes rooms 3 to 7 a coin flip between a rectangle and one of the four shapes, drawn evenly; rooms 1-2 and 8 onward stay rectangles, and a shop is always a rectangle whatever the depth. The run carries a `roomNumber`, shown in the HUD beside the wallet.
@@ -40,9 +40,10 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2316 lines)
+### Game loop (`src/game/PlayScene.js`, 2328 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
+- Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
 - Room walls: 5 static rectangles (**56 px = one full grid cell**, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`. `WALL_THICKNESS = CELL` is deliberate, not a magic number: the wall bodies fill exactly the border ring the grid marks blocked, so physics and pathing agree on which cells are solid (see the wall-pocket fix below).
 - Obstacles are generated on a **56 px grid** (24x15 cells), filling **anywhere from 0 to 1/3 of the interior**, rolled fresh every load:
@@ -72,7 +73,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `DROP_KINDS` | none - rolls what a kill leaves behind |
 | `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
-| `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
+| `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
 | `run.js` | `freshGameState`, `roomFor` | owns `gameState`'s shape; turns a restart payload into the room to build |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
@@ -350,25 +351,30 @@ Verified end to end in the browser, driven through the real keys. Loaded a run t
 - **An ordinary door from the same loaded state**: `gameState` carried by reference, EXP, items, curses, bombs and damage all kept, depth advanced by one.
 
 ### Shot range (`bullets.js`)
-A shot dies at **336 px** - six cells of the 56 px grid - unless a wall, a rock or an enemy takes it first. Baseline, not an item or a curse: every shot, always. It replaces nothing; the existing despawns all still run, whichever comes first.
+A shot dies at **336 px** - six cells of the 56 px grid - unless a wall, a rock or something it hits takes it first. Baseline, not an item or a curse: every shot, always, **on both sides**. It replaces nothing; the existing despawns all still run, whichever comes first.
 
-Distance is accumulated per bullet from where it was **last frame**, not measured from the muzzle. Displacement would give the same answer for a bullet that flies straight, which these do - but accruing per frame means a bullet only spends range while it is actually moving, and physics stops dead during the swap prompt and the pause menu. A shot held through a pause comes out of it with its range intact rather than having quietly aged.
+Distance is accumulated per shot from where it was **last frame**, not measured from the muzzle. Displacement would give the same answer for anything flying straight, which these do - but accruing per frame means a shot only spends range while it is actually moving, and physics stops dead during the swap prompt and the pause menu. A shot held through a pause comes out of it with its reach intact rather than having quietly aged.
+
+Both sides go through one `trackRange(group, range)` and one `armRange(shot)`, so the rule cannot drift between the player's bullets and the enemy's. `ENEMY_SHOT_RANGE` is its own constant that happens to equal `BULLET_RANGE`: a duel should be symmetric, and a room where the thing shooting back outranged you would make walking in the wrong move - but either side can now be tuned without the other silently following.
 
 **Does the 1200 ms lifetime still ever fire first? No - and it cannot, at any speed above 280 px/s.** At 700 px/s a bullet covers 336 px in **480 ms**, so the cap always wins with 2.5x to spare. `limitThatBinds()` says which rule is really in charge and is tested at the shipped numbers, either side of the crossover, and on the tie; `slowestSpeedRangeStillBinds()` names the 280 px/s threshold below which the timeout would start cutting shots short of their advertised range.
 
 **Left in as a backstop rather than simplified away.** It is one line, it costs nothing, and it is the only thing that would ever clean up a bullet whose distance stopped accruing. More usefully, the pair is now self-documenting: an item that slowed bullets below 280 px/s would silently shorten range, and the test is what would catch that rather than a playtester wondering why their gun felt wrong. If it is ever removed, remove `travelIn` and the crossover test with it - they exist to justify keeping it.
 
-**Measured in the browser**, obstacles cleared, 16 aim directions from open floor:
+The enemy's timeout is even further from binding. At 208 px/s - 0.65 of the player's move speed - a shot crosses 336 px in about **1.6 s** against a 4 s timeout, and the timeout would only start cutting shots short below **84 px/s**. The reach is symmetric but the threat is not: the same distance takes an enemy shot three times longer to cover, which is three times as long to walk out of the way.
 
-| | |
-|---|---|
-| cap | 336 px |
-| last drawn distance | 326.7 - 338.3 px |
-| spread | 11.7 px - exactly one physics frame at 700 px/s |
-| time alive | 496 - 528 ms |
-| lifetime | 1200 ms, never reached |
+**Measured in the browser**, obstacles cleared, firing from open floor:
 
-The 11.7 px spread is frame quantisation and is not removable without clamping a bullet's final position on the crossing frame, which is not worth a stuck frame of rendering. Wall hits still win when they come first: fired from 150 px out, a shot died at 58 px. Held down, the stream now visibly stops about a quarter of the way across a 1344 px room instead of reaching the far wall.
+| | player bullet | enemy shot |
+|---|---|---|
+| cap | 336 px | 336 px |
+| last drawn distance | 326.7 - 338.3 px | 329.3 - 336.3 px |
+| spread | 11.7 px | 7.0 px |
+| one physics frame | 11.7 px at 700 px/s | 3.3 px at 208 px/s |
+| time alive | 496 - 528 ms | 1616 - 1648 ms |
+| lifetime, never reached | 1200 ms | 4000 ms |
+
+The spread on each side is frame quantisation, and is not removable without clamping a shot's final position on the crossing frame - not worth a stuck frame of rendering. Wall hits still win when they come first: fired from 150 px out, a player shot died at 58 px. Held down, the player's stream now visibly stops about a quarter of the way across a 1344 px room instead of reaching the far wall, and in a three-enemy fight the two enemies 750-800 px away threw shots that trailed off well short while the one at 278 px connected.
 
 ### Off-screen enemy arrows (`pings.js`)
 A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of a room's six enemies are outside the camera, and the last one alive can be minutes of screen away. One small red triangle per off-screen enemy sits on a ring inset 30 px from the edge of the screen, positioned and rotated at the bearing from the camera's centre to that enemy, repainted every frame from `update()` and hidden the frame its enemy comes into view.
@@ -384,7 +390,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 20 files, 290 tests, green.
+- `npx vitest run` → 20 files, 295 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
@@ -395,6 +401,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
+- **Enemies fire from outside their own range.** `hasShotLineTo` asks whether a rock is in the way and never how far the player is, so an enemy with a clear line shoots from anywhere - and now that shots stop at 336 px, one fired from 900 px away dies 539 px short. Measured. It reads as "out of range" rather than as a bug, and it is symmetric with the player's auto-fire, which wastes shots the same way. But the enemy is spending a 1.4 s fire cooldown on nothing, so a distant enemy is harmless in a way it was not before, and in a big room that is most of them. The fix is a distance check in `updateEnemyFiring` - deliberately not done here, because it changes how dangerous a room is and that is a balance call, not a bug fix.
 - **A big room can leave an enemy 40 s away.** G's longest route is 83 cells. Nothing is wrong with the pathing - it walks the whole way - and the off-screen arrows now at least say *where* the straggler is, but "clear the room" can still mean waiting on one enemy crossing a room and a half. A minimap, or a leash that pulls the last enemy in, is the next thing to try.
 - **A big room's entry is a spawn point, not a doorway.** The mask's entry cell is part of the wall ring and stays solid; the player is placed two cells inside it. There is no opening drawn, so nothing marks where you came in - the same complaint the rectangular room's bottom doorway already has.
 - **The HUD no longer rides a wall band in a big room.** The bar and the item plates are pinned to the screen, which is right, but the room scrolls under them, so they sit over open floor rather than over the wall they were laid out on. Readable - they carry their own dark plates - but it is not the design.
