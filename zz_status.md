@@ -4,7 +4,10 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, tenth pass) — placeholder item icons
+## Latest session (2026-09-03, eleventh pass) — the shop rolls all three slots
+A shelf used to be one rolled catalogue item and both refills, every single time — two of its three slots never varied. All three are drawn from one pool now, so a shop can be three items, or two and a refill, or a refill and two items. **The refills are entries in that draw, not fixtures.**
+
+## Previous session (2026-09-03, tenth pass) — placeholder item icons
 Every item now carries a placeholder icon: **shape is the tier, colour is the item**. The pause menu's list of passive names and effects is gone, replaced by the icons themselves with a small `xN` under any that stack; a drop on the floor wears the same icon, so what you picked up and what is in your list are visibly the same object.
 
 ## Previous session (2026-09-03, ninth pass) — the reveal beat
@@ -535,10 +538,23 @@ The safe payout pools **treasure and reward together**. Treasure lost its only s
 
 Sampled 5,000 rolls: all four types come up about evenly (3,072-3,182 each), the 2-3 door split is unchanged, and `combat_heavy` never appears.
 
-### Shop shelf: exactly three
-`SHELF_SIZE = 3`, refills included. It used to roll 3-4 catalogue items **on top of** both refills, so a shelf was five or six wide — and since a visit buys exactly one thing, the extra width was only ever more options to discard. There is no size roll any more, so `rollShopStock` spends only the rolls the draws need.
+### Shop shelf: three slots, all of them rolled
+`SHELF_SIZE = 3`. It used to roll 3-4 catalogue items **on top of** both refills, so a shelf was five or six wide — and since a visit buys exactly one thing, the extra width was only ever more options to discard.
 
-Both refills are always among the three: they are the shop's staple, and the HP Refill is the only full heal left now that a floor heal is half a heart. **That leaves one rolled catalogue item per visit** — see Not done.
+**Every slot is drawn now**, without replacement, from one pool: the catalogue on its ownership weighting, plus `HP_REFILL` and `BOMB_REFILL` at `REFILL_WEIGHT = 1`. One is the neutral figure — an item the player has never held also draws at 1, and one they have stacked draws lower. Stocking both refills unconditionally left exactly one slot doing any varying: two thirds of every shelf was the same two boxes in the same two places, and the only decision was whether to take the item.
+
+Measured over 4,000 shelves against the scene's own pool (10 sellable items, empty rack):
+
+| | |
+|---|---|
+| three catalogue items | 55.5% |
+| two items and a refill | 39.9% |
+| one item and both refills | 4.7% |
+| HP Refill on the shelf | **25.1%** (was 100%) |
+| Bomb Refill on the shelf | 24.1% (was 100%) |
+| any refill at all | 44.5% |
+
+**That is a real difficulty change, not just a shuffle.** The HP Refill is the only full heal in the game — a floor heal is half a heart — and it now appears in one shop in four rather than in every one. `REFILL_WEIGHT` is the single knob: raising it to 2 roughly doubles a refill's share of each draw. Left at 1 because "random three" was the ask; see Not done.
 
 `sellableItems(items, inventory)` moved out of `PlayScene` into `shop.js` so the guarantee is testable: **a debuff is never for sale at any price**, the unique tiers drop out once owned, and passives stay in at any count.
 
@@ -582,7 +598,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 18 files, 346 tests, green.
+- `npx vitest run` → 18 files, 349 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
@@ -594,7 +610,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ## Not done / known gaps
 - **A risky room's payout is still refusable, though it is now worth taking.** Each debuff carries a real bonus, so walking around one costs the player something - which is the fix for "why would anyone touch this". But with no take/skip UI, refusing is still just a matter of not walking into it, so a player who does not want *that particular* trade pays nothing to skip it. Live with it, or make the payout land on the player rather than on the floor.
-- **A shop sells one catalogue item per visit.** With the shelf at three and both refills always on it, that is what is left. Kills drop no items either, so a run's item income is one safe room-clear plus one shop item — the rack fills very slowly. Raise `SHELF_SIZE` to 4 if that plays too thin.
+- **Healing is now a coin flip you do not control.** The HP Refill turns up on 25% of shelves since all three slots became rolled, and it is the only full heal in the game. A run that draws three item-only shops in a row has no way to top up beyond half-heart floor drops. `REFILL_WEIGHT` in `shop.js` is the knob if that plays too thin; a floor rule ("at least one refill per shelf") would be the other answer, at the cost of the varying shelf this change was for.
 - **A puzzle room is not empty if you carry Slug Step.** The room generates nothing, but the slug is something the player brought with them, so it follows them in. Correct as far as it goes, but worth revisiting once a puzzle room has actual contents.
 - **Enemies fire from outside their own range.** `hasShotLineTo` asks whether a rock is in the way and never how far the player is, so an enemy with a clear line shoots from anywhere - and now that shots stop at 336 px, one fired from 900 px away dies 539 px short. Measured. It reads as "out of range" rather than as a bug, and it is symmetric with the player's auto-fire, which wastes shots the same way. But the enemy is spending a 1.4 s fire cooldown on nothing, so a distant enemy is harmless in a way it was not before, and in a big room that is most of them. The fix is a distance check in `updateEnemyFiring` - deliberately not done here, because it changes how dangerous a room is and that is a balance call, not a bug fix.
 - **A big room can leave an enemy 40 s away.** G's longest route is 83 cells. Nothing is wrong with the pathing - it walks the whole way - and the off-screen arrows now at least say *where* the straggler is, but "clear the room" can still mean waiting on one enemy crossing a room and a half. A minimap, or a leash that pulls the last enemy in, is the next thing to try.

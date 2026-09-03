@@ -29,11 +29,27 @@ const POOL = [
 ]
 
 describe('rollShopStock', () => {
-  it('always stocks both refills', () => {
-    const stock = rollShopStock(POOL, rng(0, 0, 0, 0))
+  // The refills are two entries in the draw now, not fixtures. A shop that happens to
+  // offer neither is a real hand, and so is one that offers both.
+  it('can stock a shelf with no refill on it at all', () => {
+    const shelves = Array.from({ length: 300 }, () => rollShopStock(POOL, Math.random))
 
-    expect(stock).toContainEqual(HP_REFILL)
-    expect(stock).toContainEqual(BOMB_REFILL)
+    expect(shelves.some((s) => s.every((entry) => entry.kind === 'item'))).toBe(true)
+  })
+
+  it('can still stock both refills at once', () => {
+    const shelves = Array.from({ length: 300 }, () => rollShopStock(POOL, Math.random))
+
+    expect(
+      shelves.some((s) => s.includes(HP_REFILL) && s.includes(BOMB_REFILL))
+    ).toBe(true)
+  })
+
+  it('never stocks the same refill twice', () => {
+    Array.from({ length: 300 }, () => rollShopStock(POOL, Math.random)).forEach((stock) => {
+      expect(stock.filter((entry) => entry === HP_REFILL).length).toBeLessThanOrEqual(1)
+      expect(stock.filter((entry) => entry === BOMB_REFILL).length).toBeLessThanOrEqual(1)
+    })
   })
 
   // A shelf is exactly SHELF_SIZE wide now, refills included, whatever the rolls say.
@@ -44,11 +60,25 @@ describe('rollShopStock', () => {
     )
   })
 
-  it('fills the shelf with the two refills and one rolled item', () => {
-    const stock = rollShopStock(POOL, rng(0, 0, 0, 0))
+  // The point of the change: how many of the three are catalogue items now varies.
+  it('varies how much of the shelf is catalogue items', () => {
+    const counts = new Set(
+      Array.from({ length: 400 }, () =>
+        rollShopStock(POOL, Math.random).filter((entry) => entry.kind === 'item').length
+      )
+    )
 
-    expect(stock.filter((entry) => entry.kind === 'item')).toHaveLength(SHELF_SIZE - 2)
-    expect(stock.filter((entry) => entry.kind !== 'item')).toHaveLength(2)
+    expect(counts.size).toBeGreaterThan(1)
+    ;[...counts].forEach((n) => {
+      expect(n).toBeGreaterThanOrEqual(SHELF_SIZE - 2)
+      expect(n).toBeLessThanOrEqual(SHELF_SIZE)
+    })
+  })
+
+  it('fills every slot it can, whatever mix it draws', () => {
+    Array.from({ length: 200 }, () => rollShopStock(POOL, Math.random)).forEach((stock) =>
+      expect(stock).toHaveLength(SHELF_SIZE)
+    )
   })
 
   // No size roll any more, so the first random value is a draw rather than a count -
@@ -61,19 +91,19 @@ describe('rollShopStock', () => {
   })
 
   it('never stocks the same item twice', () => {
-    const stock = rollShopStock(POOL, rng(0.99, 0, 0, 0, 0))
-    // one item per shelf today, so this is a guard on the draw rather than on this shelf
-    const ids = stock.filter((entry) => entry.kind === 'item').map((entry) => entry.item.id)
+    Array.from({ length: 300 }, () => rollShopStock(POOL, Math.random)).forEach((stock) => {
+      const ids = stock.filter((entry) => entry.kind === 'item').map((entry) => entry.item.id)
 
-    expect(new Set(ids).size).toBe(ids.length)
+      expect(new Set(ids).size).toBe(ids.length)
+    })
   })
 
-  it('draws only from the pool it was given', () => {
-    const stock = rollShopStock(POOL, rng(0.99, 0.99, 0.99, 0.99, 0.99))
-
-    stock
-      .filter((entry) => entry.kind === 'item')
-      .forEach((entry) => expect(POOL.map((slot) => slot.item)).toContain(entry.item))
+  it('draws catalogue items only from the pool it was given', () => {
+    Array.from({ length: 200 }, () => rollShopStock(POOL, Math.random)).forEach((stock) =>
+      stock
+        .filter((entry) => entry.kind === 'item')
+        .forEach((entry) => expect(POOL.map((slot) => slot.item)).toContain(entry.item))
+    )
   })
 
   it('stocks what it can when the pool is smaller than the shelf', () => {
@@ -99,8 +129,12 @@ describe('rollShopStock', () => {
     expect(stock[0].item).toBe(heavy)
   })
 
-  it('stocks the refills alone when the pool is empty', () => {
-    expect(rollShopStock([], rng(0))).toEqual([HP_REFILL, BOMB_REFILL])
+  it('stocks the refills alone when the catalogue pool is empty', () => {
+    const stock = rollShopStock([], rng(0, 0))
+
+    expect(stock).toHaveLength(2)
+    expect(stock).toContain(HP_REFILL)
+    expect(stock).toContain(BOMB_REFILL)
   })
 
 })
