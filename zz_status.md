@@ -4,7 +4,10 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, third pass)
+## Latest session (2026-09-03, fourth pass)
+**A kill can no longer drop an item.** Every kill still pays 2 EXP, and one in ten additionally leaves **half a heart** on the floor — that is the whole of the enemy drop table now. The treasure and reward kinds are gone from the roll; items are to come from clearing a room, which is the next thing to build, and from the shop. **The heal is now half a heart rather than a full refill**, which is a real nerf to what was there: one lucky drop used to undo a whole room.
+
+## Previous session (2026-09-03, third pass)
 **Shots now have a range, on both sides: 336 px, six cells.** Distance is accumulated per bullet from where it was last frame, so a shot dies at the cap whatever else is going on - and only accrues while it is actually moving, which matters because physics stops during the swap prompt and the pause menu. The wall, rock and enemy hits are unchanged, and the old 1200 ms lifetime stays as a backstop it now never gets to use: at 700 px/s the cap is reached in **480 ms**, two and a half times inside it. `bullets.js` is new and holds that arithmetic with the tests that keep it honest. **Enemy shots carry the same cap**, through the same tracker - their 4 s timeout is even further from binding, since a 208 px/s shot crosses 336 px in about 1.6 s. One consequence to be aware of: enemies still *fire* from beyond their reach, because `hasShotLineTo` asks about rocks and never about distance, so a shot from across a room now evaporates partway. See Not done.
 
 ## Previous session (2026-09-03, second pass)
@@ -31,7 +34,7 @@ Six changes, each verified live against the dev server and folded into the secti
 1. **Door honesty** raised to 0.9/0.9 so the two channels compound to ~81% fully-honest doors (was 68%).
 2. **Room clutter** rolled 0-33% per room instead of a fixed quarter — see the obstacle section; `obstacles.js` is new.
 3. **Rooms are live from frame one** — the walk-up entry line and its prompt are gone.
-4. **Enemy drops** replaced room-start treasure: 10% per kill, split evenly between a heal, a treasure and a reward; `drops.js` is new.
+4. **Enemy drops** replaced room-start treasure: 10% per kill, split evenly between a heal, a treasure and a reward; `drops.js` is new. (Superseded 2026-09-03: heal only, half a heart.)
 5. **Hits no longer move the player** — knockback and its input lockout are gone.
 6. **Shops** never spawn guards on entry, sell exactly one thing per visit, and wake their guards on the sale.
 
@@ -40,7 +43,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2328 lines)
+### Game loop (`src/game/PlayScene.js`, 2333 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
@@ -70,7 +73,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
 | `currency.js` | `addExp`, `spendExp` | `exp` |
 | `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `priceOf`, `canAfford`, `rollShopStock` | none - rolls and prices, the scene applies them |
-| `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `DROP_KINDS` | none - rolls what a kill leaves behind |
+| `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP` | none - rolls whether a kill leaves half a heart |
 | `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
@@ -164,13 +167,17 @@ An already-owned reward **costs nothing**: `takeReward` short-circuits before to
 ### Pickups + scene wiring (`PlayScene.js`)
 - **Treasure pickup** (gold) is **an enemy drop now, not room furniture** — it lands where the enemy died, **weighted-rolled** from the treasure-sourced items (Heavy Vest, Steady Boots), always curse-free, granted with `grantItem`, and does **not** count toward `rewardsCollected`. Rooms no longer lay a treasure out at the start; `spawnTreasurePickup` takes the death coordinates instead of calling `pickSpawnPoint`.
 - **Duplicates are refused per tier, not globally.** A second trinket or a repeat active is a no-op: no stat change, no `rewardsCollected`, no curse, no swap prompt, and the pickup stays on the floor with a one-off `already owned` toast. **Passives are the exception** — they stack, so a duplicate is always taken; what a copy costs you is its odds of coming up again (see spawn weighting).
-- **Reward pickup** is one of the three enemy drops, **weighted-rolled** from the reward-sourced items (4 passives + 4 actives), cursed at **the room's own `cursedChance`** — 0 behind a safe door, 0.9 behind a risky one, 0.5 in an ordinary combat room. Cursed ones render purple, clean ones cyan. Goes through `takeReward`, so `rewardsCollected` and the existing curse roll still apply — and `enemyStrength` from the 'enemy' curse now actually reaches `enemyHpFor`.
-- **Heal pickup** (red) is the third enemy drop and the only healing outside the shop. It carries no item, so `onPickup` handles it before anything that reads one: back to full HP, the same all-or-nothing refill the shop sells. At full HP it is **left on the floor** rather than eaten for nothing — come back for it after the next hit.
+- **Reward pickup** is **weighted-rolled** from the reward-sourced items (4 passives + 4 actives), cursed at **the room's own `cursedChance`** — 0 behind a safe door, 0.9 behind a risky one, 0.5 in an ordinary combat room. Cursed ones render purple, clean ones cyan. Goes through `takeReward`, so `rewardsCollected` and the existing curse roll still apply — and `enemyStrength` from the 'enemy' curse now actually reaches `enemyHpFor`. **Nothing spawns one at present** — a kill used to, and no longer does; see enemy drops below.
+- **Heal pickup** (red) is the only thing a kill can leave and the only healing outside the shop. It carries no item, so `onPickup` handles it before anything that reads one. It is worth **half a heart — 1 HP** (`HEAL_PICKUP_HP = HP_PER_HEART / 2`), not the refill it used to be, so the shop's all-or-nothing HP Refill is now the thing worth its price. At full HP it is **left on the floor** rather than eaten for nothing — come back for it after the next hit.
 
-#### Enemy drops (`drops.js`) — replaced the guaranteed reward
-**A kill drops something one time in ten.** `rollEnemyDrop(randomFn)` returns `null` or one of `heal` / `treasure` / `reward`, evenly split, so each kind lands on about **3.3% of kills**. EXP is unaffected — every kill still pays `EXP_PER_KILL`.
+#### Enemy drops (`drops.js`) — EXP and half a heart, nothing else
+**A kill pays 2 EXP and, one time in ten, leaves half a heart.** `rollEnemyDrop(randomFn)` returns `HEAL_DROP` or `null` and spends exactly one roll — there is no longer a kind to pick once the chance has passed.
 
-It used to be a reward from **every single death**, which meant a hard combat_heavy room handed over nine items and the racks filled before the run had asked the player to choose anything. Rooms also used to lay a treasure on the floor at the start; they do not any more, so **enemies are the only source of items on the floor** and the shop is the only place to buy one outright.
+**A kill can no longer drop an item of any kind.** The roll used to be an even three-way split between a heal, a treasure and a reward, so each landed on about 3.3% of kills and killing things was the run's item economy: how many enemies a room happened to hold decided how much the run gave you. Items are to come from clearing a room instead — the next thing to build, where they can be handed over deliberately — and from the shop, which already has its own mechanism. The drop rate itself has not moved, so **healing off the floor is three times as common as it was** (a whole 10% rather than a third of it) even though a kill gives less overall.
+
+**What happened to the old kind constants:** `DROP_KINDS` is **removed**. There is one kind now, so a list of them was a concept with nothing in it; a single `HEAL_DROP` constant replaces it so the scene and the module cannot drift on the spelling. The `'treasure'` and `'reward'` strings survive only as `pickup.spec.kind` values inside `PlayScene`, which is where they always did the real work.
+
+**`spawnTreasurePickup` and `spawnRewardPickup` are deliberately left in place and are currently unreferenced.** They are the rendering half, unchanged by any of this, and the room-clear payout will call them as they stand. They are flagged in a comment above `spawnHealPickup` — delete them if room-clear lands differently.
 
 `roomPlan.treasure` went with it — nothing read the field once room-start treasure was gone, so `ROOM_PLANS` and `roomPlanFor` dropped it. SAFE and RISKY doors are now told apart by enemy count and `cursedChance` alone.
 - Touching a pickup takes it. With no take/skip UI yet, **the only way to skip a cursed reward is to walk around it** — that is what the purple tint is for.
@@ -390,7 +397,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 20 files, 295 tests, green.
+- `npx vitest run` → 20 files, 296 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
@@ -490,7 +497,8 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [x] ~~Spawn weighting off `countOwned`~~ — `weights.js`; weight halves per copy held, wired into reward, treasure and shop rolls.
 - [x] ~~EXP currency and a shop to spend it in~~ — `currency.js`, `shop.js`, shop room type, both refills, price table; guards come off the door tier, hold off until a purchase lands, and a visit buys exactly one thing.
 - [x] ~~Vary room density~~ — `obstacles.js`; coverage rolled 0-33% per room instead of a fixed quarter, empty rooms included.
-- [x] ~~Make drops rare~~ — `drops.js`; one kill in ten leaves a heal, a treasure or a reward, and rooms no longer start with treasure on the floor.
+- [x] ~~Make drops rare~~ — `drops.js`; one kill in ten leaves half a heart, and nothing else. Rooms no longer start with treasure on the floor either.
+- [ ] **Room-clear payout**: give a cleared room the treasure/reward drop that kills no longer make. `spawnTreasurePickup` and `spawnRewardPickup` are waiting, unreferenced, for exactly this.
 - [x] ~~**Wire the big rooms into the scene**~~ — done for L: walls built from the mask, the mask fed to `generateObstacles` as the solid grid, the wall joined to the walk-line test so BFS routes round the concave corner, entry and exit doorways placed off the mask's own data, and the camera following the player. Z, T and G are still unreached.
 - [x] ~~**Reach the big rooms in play**~~ - `rollRoomShape()`; rooms 3-7 are a coin flip, the four shapes draw evenly, shops stay rectangular.
 - [ ] **Tune the big-room band.** 3-7 at 50/50 is a first guess made without a long run behind it: it can deal five big rooms in a row, or none at all, and nothing scales the band with how a run is going.

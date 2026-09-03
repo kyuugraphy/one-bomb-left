@@ -16,7 +16,7 @@ import { collectReward, takeReward } from './rewards.js'
 import { canAfford, priceOf, rollShopStock } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
 import { freshGameState, roomFor } from './run.js'
-import { rollEnemyDrop } from './drops.js'
+import { HEAL_DROP, rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
 import { ROOM_SHAPES, rollRoomShape } from './shapes.js'
 import {
@@ -54,6 +54,11 @@ const ENTRY_LINE_OFFSET = 140
 const MIN_SPAWN_DISTANCE = 260
 const MAX_HP = 6
 const HP_PER_HEART = 2
+// What a heal pickup is worth: half a heart. It used to refill the bar outright, which
+// made one lucky drop undo a whole room and left HP with nothing to say between "fine"
+// and "dead". Half a heart is a nudge, so healing is something you collect rather than
+// something that resets you.
+const HEAL_PICKUP_HP = HP_PER_HEART / 2
 const DAMAGE_PER_HIT = 1
 const HP_SEGMENT_WIDTH = 26
 const HP_SEGMENT_HEIGHT = 22
@@ -964,22 +969,17 @@ export class PlayScene extends Phaser.Scene {
     this.tweens.add({ targets: enemy, alpha: 0.3, duration: 60, yoyo: true })
   }
 
-  // A kill always pays EXP and drops something only one time in ten - a heal, a safe
-  // treasure or a reward the room may have cursed. Enemies are the only source of items
-  // on the floor now that rooms no longer start with treasure laid out in them.
+  // A kill always pays EXP, and one in ten additionally leaves half a heart behind. It
+  // never leaves an item: a kill used to be able to drop a treasure or a reward, which
+  // made killing things the run's item economy. Items come from clearing a room and from
+  // the shop now, so what an enemy leaves is healing or nothing.
   killEnemy(enemy) {
     const { x, y } = enemy
     enemy.destroy()
     addExp(this.gameState, EXP_PER_KILL)
 
-    const drop = rollEnemyDrop(Math.random)
-
-    if (drop === 'heal') {
+    if (rollEnemyDrop(Math.random) === HEAL_DROP) {
       this.spawnHealPickup(x, y)
-    } else if (drop === 'treasure') {
-      this.spawnTreasurePickup(x, y)
-    } else if (drop === 'reward') {
-      this.spawnRewardPickup(x, y)
     }
   }
 
@@ -1171,6 +1171,11 @@ export class PlayScene extends Phaser.Scene {
 
   // The only healing outside the shop. It carries no item, so onPickup handles it before
   // anything that reads one.
+  //
+  // spawnRewardPickup and spawnTreasurePickup above are unreferenced as of this change -
+  // a kill no longer rolls either. They are deliberately kept: the room-clear payout is
+  // the next thing to build and will call them unchanged. Delete them if that lands
+  // differently.
   spawnHealPickup(x, y) {
     this.addPickup(x, y, { kind: 'heal', color: PICKUP_HP_REFILL_COLOR })
   }
@@ -1629,8 +1634,9 @@ ${advertised.tier}`, {
     console.log('[one-bomb-left] picked up', item.id, 'stats', this.stats)
   }
 
-  // A heal is all-or-nothing, like the shop's refill. At full HP it is left on the floor
-  // rather than eaten for nothing - come back for it after the next hit.
+  // Half a heart, not a refill. At full HP it is left on the floor rather than eaten for
+  // nothing - come back for it after the next hit. The shop's HP Refill is still the
+  // all-or-nothing one, which is now the thing that makes it worth its price.
   takeHeal(pickup) {
     if (this.health >= this.stats.maxHp) {
       if (!pickup.spec.announcedOwned) {
@@ -1640,10 +1646,9 @@ ${advertised.tier}`, {
       return
     }
 
-    this.health = this.stats.maxHp
-    this.refreshHealthBar()
+    this.healPlayer(HEAL_PICKUP_HP)
     pickup.destroy()
-    this.toast('heal - back to full HP', '#f87171')
+    this.toast('heal - half a heart', '#f87171')
   }
 
   // Every stat is recomputed from the inventory, so a set bonus that no longer holds
