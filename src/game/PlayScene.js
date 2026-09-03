@@ -1,10 +1,27 @@
 import Phaser from 'phaser'
 import { cooldownRemaining, triggerActive } from './actives.js'
+import { addExp, spendExp } from './currency.js'
 import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
-import { createInventory } from './inventory.js'
-import { itemsFrom } from './items.js'
+import { countOwned, createInventory, hasSetBonus, passiveCounts } from './inventory.js'
+import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
 import { collectReward, takeReward } from './rewards.js'
+import { canAfford, priceOf, rollShopStock } from './shop.js'
+import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
+import { rollEnemyDrop } from './drops.js'
+import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
+import { ROOM_SHAPES } from './shapes.js'
+import {
+  cellCentre,
+  doorCells,
+  innerCell,
+  roomSize,
+  solidGrid,
+  splitDoors,
+  wallCells
+} from './shapeRoom.js'
+import { edgePoint } from './pings.js'
+import { pickWeighted, weightedPassivePool } from './weights.js'
 import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 
 const PLAYER_SPEED = 320
@@ -17,14 +34,13 @@ const MUZZLE_OFFSET = PLAYER_SIZE / 2 + BULLET_RADIUS
 const ENEMY_SIZE = 36
 const ENEMY_SPEED = 120
 const ENEMY_BASE_HP = 10
+const EXP_PER_KILL = 2
 const ENEMY_SHOT_SPEED = PLAYER_SPEED * 0.65
 const ENEMY_SHOT_RADIUS = 7
 const ENEMY_SHOT_COLOR = 0xfb923c
 const ENEMY_SHOT_LIFETIME = 4000
 const ENEMY_FIRE_COOLDOWN = 1400
 const ENEMY_MUZZLE_OFFSET = ENEMY_SIZE / 2 + ENEMY_SHOT_RADIUS
-const KNOCKBACK_SPEED = 420
-const KNOCKBACK_DURATION = 180
 const HIT_COOLDOWN = 600
 const WALL_COLOR = 0x4b5563
 const DOORWAY_WIDTH = 140
@@ -52,17 +68,6 @@ const CELL = 56
 // into and the 36 px enemy did not, so a rock in the next cell in made an invincibility
 // pocket - unreachable on foot and, often enough, out of the enemy's shot line too.
 const WALL_THICKNESS = CELL
-const COVERAGE_TARGET = 1 / 4
-const ROCK_AREA_SHARE = 0.6
-const NEAR_WALL_SHARE = 2 / 3
-const WALL_BAND = 3
-const ROCK_MIN_CELLS = 1
-const ROCK_MAX_CELLS = 8
-const PIT_MIN_CELLS = 3
-const PIT_MAX_CELLS = 12
-const PIT_RUN_MIN = 2
-const PIT_RUN_MAX = 5
-const PLACEMENT_ATTEMPTS = 600
 const ROCK_COLOR = 0x6b7280
 const PIT_COLOR = 0x05060a
 const PICKUP_SIZE = 24
@@ -70,10 +75,65 @@ const PICKUP_REWARD_COLOR = 0x22d3ee
 const PICKUP_CURSED_COLOR = 0xa855f7
 const PICKUP_TREASURE_COLOR = 0xfbbf24
 const PICKUP_DROPPED_COLOR = 0x94a3b8
+const PICKUP_SHOP_ITEM_COLOR = 0x38bdf8
+const PICKUP_HP_REFILL_COLOR = 0xf87171
+const PICKUP_BOMB_REFILL_COLOR = 0xf97316
+// Stock is laid out on one shelf line across the room, at this fraction of the height -
+// high enough to read as a counter you walk up to, clear of the exit pad at the top.
+const SHOP_SHELF_Y = 0.42
+const SHOP_SHELF_MARGIN = WALL_THICKNESS + 60
+// Two enemies, not the usual one: a shop is a detour, so the toll for a guarded one is a
+// step up.
+// The overlap re-fires every frame, so a refused purchase only speaks this often.
+const SHOP_DENY_COOLDOWN = 1200
+const EXIT_SIZE = CELL - 8
+// Doors sit along the top of the room, clear of the walls, spread like the shop shelf.
+const DOOR_MARGIN = WALL_THICKNESS + 90
+const DOOR_ROW_Y = CELL * 1.5
+// The room a run starts in: one enemy, nothing cursed. No door chose it, so
+// it is spelled out rather than rolled.
+const ENTRANCE_DOOR = { type: 'safe_reward', tier: 'easy' }
+// How far in from the wall a shaped room's entry drops the player, and how wide a patch
+// around them is kept clear of obstacles - the shaped-room answer to the rectangle's
+// doorway channel.
+const ENTRY_INSET = 2
+const ENTRY_CLEARANCE = 2
+// How hard the camera chases the player once a room is bigger than the viewport. Low
+// enough to lag behind a sprint and let the room read as somewhere you are moving through.
+const CAMERA_LERP = 0.12
+
+// ===== DEBUG / TEMPORARY - remove before shipping ===========================
+// L rebuilds the room as a big room from shapes.js, carrying the run's items and health
+// across, and each press moves on to the next shape: L, Z, T, G, then round to L again.
+// Nothing rolls a shape yet - this key is the only way into one. Take a door or press R
+// to get back to an ordinary rectangular room. Tracked in the cleanup TODO in
+// zz_status.md.
+const DEBUG_SHAPE_KEY = true
+const DEBUG_SHAPE_CYCLE = ['L', 'Z', 'T', 'G']
+// A packed room, not the entrance's single enemy: the point of walking the L is watching
+// several of them find their way round its corner.
+const DEBUG_SHAPE_PLAN = { type: 'combat_heavy', tier: 'medium' }
+
+if (DEBUG_SHAPE_KEY) {
+  console.warn(
+    '[one-bomb-left] DEBUG: key L rebuilds the room as the L-shaped big room. ' +
+      'Temporary - see the cleanup TODO in zz_status.md.'
+  )
+}
+// ===== end DEBUG ============================================================
 const DROP_OFFSET = 84
 // A declined or just-dropped pickup stays inert until the player is this far from it, so
 // the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
 const PICKUP_REARM_DISTANCE = 78
+
+// Off-screen enemy arrows. Only a big room can hide an enemy - a rectangular room is the
+// viewport - so these only ever appear in one. The ring is inset far enough that a whole
+// arrow fits on screen, and they draw over the HUD rather than under it: an arrow half
+// swallowed by the health bar reads as a glitch, and the ring crosses both wall bands.
+const PING_SIZE = 15
+const PING_MARGIN = 30
+const PING_COLOR = 0xef4444
+const PING_ALPHA = 0.9
 
 const SLOT_SIZE = 40
 const SLOT_GAP = 6
@@ -87,6 +147,14 @@ const SLOT_VEIL_COLOR = 0x05070c
 const HUD_DEPTH = 20
 const PROMPT_DEPTH = 100
 const SWAP_PANEL_WIDTH = 700
+const PAUSE_PANEL_WIDTH = 620
+
+// Resume and Exit only. No 'options' entry until there are options to put behind it - a
+// row that does nothing is worse than a row that is not there.
+const PAUSE_ENTRIES = [
+  { id: 'resume', label: 'Resume' },
+  { id: 'exit', label: 'Exit run' }
+]
 
 // Initials read better than a truncated name in a 40 px box: Iron Plating -> IP. A
 // single-word name has no initials to take, so it keeps its first two letters instead of
@@ -97,7 +165,9 @@ const abbreviate = (name) => {
 
   return initials.slice(0, 3).toUpperCase()
 }
-const CURSED_CHANCE = 0.5
+// Stock is either a catalogue item or a refill; both carry a name, one a layer deeper.
+const shopLabelFor = (entry) => (entry.kind === 'item' ? entry.item.name : entry.name)
+
 const PANIC_RADIUS = 240
 const PANIC_DAMAGE = 3
 const PANIC_PUSH_SPEED = 560
@@ -106,14 +176,6 @@ const SECOND_WIND_HEAL = 1
 const REPAIR_KIT_HEAL = 2
 const BULWARK_DURATION = 2500
 const TOAST_LIFETIME = 2800
-
-// right, down, left, up - growNoodle turns by rotating this index
-const NEIGHBOURS = [
-  [0, 1],
-  [1, 0],
-  [0, -1],
-  [-1, 0]
-]
 
 // The unmodified player. Items are layered on top of this by computeStats().
 const BASE_STATS = {
@@ -133,6 +195,8 @@ function freshGameState() {
     riskLevel: 0,
     enemyStrength: 0,
     rewardsCollected: 0,
+    exp: 0,
+    bombCount: 0,
     inventory: createInventory(),
     cooldowns: {}
   }
@@ -143,45 +207,55 @@ export class PlayScene extends Phaser.Scene {
     super('play')
   }
 
-  create() {
-    const { width, height } = this.scale
+  // A restart hands the next room the plan the chosen door resolved to, plus the state
+  // to keep. Plain restart() passes nothing and starts a fresh run in the entrance room.
+  init(data) {
+    this.roomPlan = data?.plan ?? roomPlanFor(ENTRANCE_DOOR)
+    this.roomType = this.roomPlan.roomType
+    this.carried = data?.carried ?? null
+    // A room is a rectangle unless it is handed a shape id. Nothing rolls one yet - only
+    // the debug key sets it - so every room reached by a door is still 24x15.
+    this.shape = data?.shape ? ROOM_SHAPES[data.shape] : null
+  }
 
-    this.gameState = freshGameState()
+  create() {
+    // A shaped room is measured by its mask rather than by the canvas, so the world can
+    // be larger than what is on screen. For a rectangle the two are the same size and
+    // everything below - world bounds, camera bounds, the follow - is a no-op.
+    const { width, height } = this.shape
+      ? roomSize(this.shape, CELL)
+      : { width: this.scale.width, height: this.scale.height }
+
+    this.physics.world.setBounds(0, 0, width, height)
+    this.cameras.main.setBounds(0, 0, width, height)
+
+    this.gameState = this.carried?.gameState ?? freshGameState()
     this.stats = computeStats(BASE_STATS, this.gameState.inventory)
     this.nextFireAt = 0
     this.nextHitAt = 0
-    this.knockbackUntil = 0
-    this.health = this.stats.maxHp
+    this.health = this.carried?.health ?? this.stats.maxHp
     this.gameOver = false
 
-    this.entryLine = height - ENTRY_LINE_OFFSET
-    this.roomEntered = false
+    this.doors = []
+    this.leaving = false
 
     this.buildWalls(width, height)
     this.buildObstacles(width, height)
+    this.cacheWalkBlockers()
 
-    this.player = this.add.rectangle(
-      width / 2,
-      height - DOORWAY_MARGIN,
-      PLAYER_SIZE,
-      PLAYER_SIZE,
-      0x4ade80
-    )
+    const start = this.shape
+      ? this.centreOf(this.entryCell)
+      : new Phaser.Math.Vector2(width / 2, height - DOORWAY_MARGIN)
+
+    this.player = this.add.rectangle(start.x, start.y, PLAYER_SIZE, PLAYER_SIZE, 0x4ade80)
     this.physics.add.existing(this.player)
     this.player.body.setCollideWorldBounds(true)
+    this.cameras.main.startFollow(this.player, true, CAMERA_LERP, CAMERA_LERP)
 
     this.bullets = this.add.group()
     this.enemyShots = this.add.group()
     this.enemies = this.add.group()
     this.pickups = this.add.group()
-
-    this.entryText = this.add
-      .text(width / 2, height / 2, 'Move up to enter the room', {
-        fontFamily: 'monospace',
-        fontSize: '22px',
-        color: '#94a3b8'
-      })
-      .setOrigin(0.5)
 
     // rocks stop bullets, pits let them fly over - both stop anything on foot
     this.physics.add.collider(this.bullets, this.walls, (bullet) => bullet.destroy())
@@ -215,12 +289,34 @@ export class PlayScene extends Phaser.Scene {
       ...this.activeKeys,
       this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR)
     ]
+    // ESC is shared: the swap prompt reads it as "leave it on the floor" and returns from
+    // update() before the pause check ever runs, so the two never both see one press.
     this.escKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC)
+    // Confirm keys for the pause menu. ENTER is unbound elsewhere and SPACE is still free
+    // (it is reserved for the bomb, which does not exist yet) - revisit when it lands.
+    this.confirmKeys = [
+      this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER),
+      this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE)
+    ]
     this.swap = null
+    this.pauseMenu = null
+    this.pings = []
+
+    // DEBUG / TEMPORARY - see DEBUG_SHAPE_KEY above.
+    if (DEBUG_SHAPE_KEY) {
+      this.debugShapeKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.L)
+    }
+
+    this.populateRoom()
   }
 
   buildWalls(width, height) {
     this.walls = this.physics.add.staticGroup()
+
+    if (this.shape) {
+      this.buildShapeWalls()
+      return
+    }
 
     const half = WALL_THICKNESS / 2
     const doorwayStart = (width - DOORWAY_WIDTH) / 2
@@ -233,6 +329,18 @@ export class PlayScene extends Phaser.Scene {
     this.addWall(width - doorwayStart / 2, height - half, doorwayStart, WALL_THICKNESS)
   }
 
+  // One tile per floor cell on the mask's edge, so the silhouette the mask draws is the
+  // silhouette you walk. The void behind them gets no tile: the ring is unbroken, so
+  // nothing on foot ever reaches it, and the L's 484 dead cells would be 484 bodies
+  // bought for nothing. They read as the background, which is what being outside is.
+  buildShapeWalls() {
+    wallCells(this.shape).forEach(([row, col]) => {
+      const { x, y } = cellCentre([row, col], CELL)
+
+      this.addWall(x, y, CELL, CELL)
+    })
+  }
+
   // Obstacles are laid out on a CELL grid so rocks can clump and pits can snake.
   // Every candidate shape is rejected unless the room stays fully walkable afterwards.
   buildObstacles(width, height) {
@@ -241,48 +349,53 @@ export class PlayScene extends Phaser.Scene {
 
     this.cols = Math.floor(width / CELL)
     this.rows = Math.floor(height / CELL)
-    this.blocked = []
-    this.reserved = []
 
-    for (let row = 0; row < this.rows; row++) {
-      this.blocked[row] = []
-      this.reserved[row] = []
-      for (let col = 0; col < this.cols; col++) {
-        const isBorder = row === 0 || col === 0 || row === this.rows - 1 || col === this.cols - 1
-        this.blocked[row][col] = isBorder
-        this.reserved[row][col] = isBorder
-      }
+    // What starts out impassable: a rectangle's border ring, or - for a shaped room - the
+    // mask's own wall ring and every void cell behind it. Everything downstream reads the
+    // grid rather than the room's dimensions, so nothing else has to know which it got.
+    const solid = this.shape
+      ? solidGrid(this.shape)
+      : Array.from({ length: this.rows }, (_, row) =>
+          Array.from(
+            { length: this.cols },
+            (_, col) =>
+              row === 0 || col === 0 || row === this.rows - 1 || col === this.cols - 1
+          )
+        )
+
+    this.solid = solid
+    this.blocked = solid.map((line) => [...line])
+    this.reserved = solid.map((line) => [...line])
+
+    if (this.shape) {
+      this.reserveEntry()
+    } else {
+      this.reserveDoorway(width, height)
     }
 
-    this.reserveDoorway(width, height)
-
-    const interiorCells = (this.cols - 2) * (this.rows - 2)
-    const targetCells = Math.floor(interiorCells * COVERAGE_TARGET)
-    const rockTarget = Math.floor(targetCells * ROCK_AREA_SHARE)
-    let rockCells = 0
-    let filled = 0
-
-    for (let attempt = 0; attempt < PLACEMENT_ATTEMPTS && filled < targetCells; attempt++) {
-      const asRock = rockCells < rockTarget
-      const remaining = targetCells - filled
-      const shape = asRock ? this.growChunk(remaining) : this.growNoodle(remaining)
-
-      if (!shape || !this.keepsRoomWalkable(shape)) {
-        continue
-      }
-
-      shape.forEach(([row, col]) => {
-        this.blocked[row][col] = true
-      })
-      this.paintShape(shape, asRock)
-
-      filled += shape.length
-      if (asRock) {
-        rockCells += shape.length
-      }
+    // A shop is bare floor: the stock is laid out on one line, and rocks and pits would
+    // only break that line up and give a guarded shop cover to shoot you from.
+    if (this.roomType === 'shop') {
+      this.coverage = 0
+      return
     }
 
-    this.coverage = filled / interiorCells
+    // Every room rolls its own clutter, from bare floor up to a third of the interior, so
+    // the same generator hands out open arenas and warrens instead of one fixed density.
+    const randomFn = () => Phaser.Math.FloatBetween(0, 1)
+    const layout = generateObstacles({
+      cols: this.cols,
+      rows: this.rows,
+      reserved: this.reserved,
+      solid: this.solid,
+      doorwayCell: this.doorwayCell,
+      coverage: rollCoverage(randomFn),
+      randomFn
+    })
+
+    this.blocked = layout.blocked
+    this.coverage = layout.coverage
+    layout.shapes.forEach(({ cells, asRock }) => this.paintShape(cells, asRock))
   }
 
   reserveDoorway(width, height) {
@@ -299,179 +412,21 @@ export class PlayScene extends Phaser.Scene {
     this.doorwayCell = [this.rows - 2, Math.floor(this.cols / 2)]
   }
 
-  // Small shapes are common, big ones rare: weight each size by 1/size.
-  pickSize(min, max, cap) {
-    const top = Math.min(max, Math.max(min, cap))
-    let total = 0
+  // The shaped-room answer to the doorway channel. The mask's entry cell is part of the
+  // wall ring - it is the hole, not the floor beside it - so the player lands the same
+  // couple of cells inward that a door pad does, and the patch around them is held clear
+  // so nobody starts the room boxed in by a rock.
+  reserveEntry() {
+    this.entryCell = this.nearestOpenCell(innerCell(this.shape.entry, ENTRY_INSET))
+    this.doorwayCell = this.entryCell
 
-    for (let size = min; size <= top; size++) {
-      total += 1 / size
-    }
-
-    let roll = Phaser.Math.FloatBetween(0, total)
-
-    for (let size = min; size <= top; size++) {
-      roll -= 1 / size
-      if (roll <= 0) {
-        return size
-      }
-    }
-
-    return min
-  }
-
-  // Two thirds of the shapes start in the band hugging the wall, the rest further in.
-  pickSeed() {
-    const nearWall = Phaser.Math.FloatBetween(0, 1) < NEAR_WALL_SHARE
-
-    for (let attempt = 0; attempt < 60; attempt++) {
-      const row = Phaser.Math.Between(1, this.rows - 2)
-      const col = Phaser.Math.Between(1, this.cols - 2)
-      const depth = Math.min(row - 1, col - 1, this.rows - 2 - row, this.cols - 2 - col)
-
-      if (nearWall !== depth < WALL_BAND) {
-        continue
-      }
-      if (this.isFree(row, col)) {
-        return [row, col]
-      }
-    }
-
-    return null
-  }
-
-  isFree(row, col) {
-    return (
-      row > 0 &&
-      col > 0 &&
-      row < this.rows - 1 &&
-      col < this.cols - 1 &&
-      !this.blocked[row][col] &&
-      !this.reserved[row][col]
-    )
-  }
-
-  // Rocks: a seed cell that accretes neighbours into a clump.
-  growChunk(cap) {
-    const seed = this.pickSeed()
-    if (!seed) {
-      return null
-    }
-
-    const size = this.pickSize(ROCK_MIN_CELLS, ROCK_MAX_CELLS, cap)
-    const cells = [seed]
-    const taken = new Set([seed.join(',')])
-
-    for (let guard = 0; cells.length < size && guard < size * 12; guard++) {
-      const [row, col] = Phaser.Utils.Array.GetRandom(cells)
-      const [dRow, dCol] = Phaser.Utils.Array.GetRandom(NEIGHBOURS)
-      const next = [row + dRow, col + dCol]
-      const key = next.join(',')
-
-      if (taken.has(key) || !this.isFree(next[0], next[1])) {
-        continue
-      }
-
-      taken.add(key)
-      cells.push(next)
-    }
-
-    return cells
-  }
-
-  // Pits: a run-and-turn walk, so they come out as I, L, U, S or G noodles.
-  growNoodle(cap) {
-    const seed = this.pickSeed()
-    if (!seed) {
-      return null
-    }
-
-    const size = this.pickSize(PIT_MIN_CELLS, PIT_MAX_CELLS, cap)
-    const turn = Phaser.Utils.Array.GetRandom([-1, 1, 0])
-    const cells = [seed]
-    const taken = new Set([seed.join(',')])
-    let heading = Phaser.Math.Between(0, 3)
-    let [row, col] = seed
-
-    while (cells.length < size) {
-      const run = Math.min(Phaser.Math.Between(PIT_RUN_MIN, PIT_RUN_MAX), size - cells.length)
-      const [dRow, dCol] = NEIGHBOURS[heading]
-      let stepped = 0
-
-      for (let i = 0; i < run; i++) {
-        const next = [row + dRow, col + dCol]
-        const key = next.join(',')
-
-        if (taken.has(key) || !this.isFree(next[0], next[1])) {
-          break
-        }
-
-        taken.add(key)
-        cells.push(next)
-        row = next[0]
-        col = next[1]
-        stepped += 1
-      }
-
-      if (stepped === 0) {
-        break
-      }
-
-      // a fixed turn direction curls into U and G, a random one zigzags
-      heading = (heading + (turn === 0 ? Phaser.Math.Between(1, 3) : turn) + 4) % 4
-    }
-
-    return cells.length >= PIT_MIN_CELLS ? cells : null
-  }
-
-  // Flood fill from the doorway: if any open cell would be cut off, drop the shape.
-  keepsRoomWalkable(shape) {
-    shape.forEach(([row, col]) => {
-      this.blocked[row][col] = true
-    })
-
-    let open = 0
-    for (let row = 1; row < this.rows - 1; row++) {
-      for (let col = 1; col < this.cols - 1; col++) {
-        if (!this.blocked[row][col]) {
-          open += 1
+    for (let r = this.entryCell[0] - ENTRY_CLEARANCE; r <= this.entryCell[0] + ENTRY_CLEARANCE; r++) {
+      for (let c = this.entryCell[1] - ENTRY_CLEARANCE; c <= this.entryCell[1] + ENTRY_CLEARANCE; c++) {
+        if (this.reserved[r]?.[c] === false) {
+          this.reserved[r][c] = true
         }
       }
     }
-
-    const seen = new Set([this.doorwayCell.join(',')])
-    const queue = [this.doorwayCell]
-    let reached = 0
-
-    while (queue.length) {
-      const [row, col] = queue.pop()
-      reached += 1
-
-      NEIGHBOURS.forEach(([dRow, dCol]) => {
-        const next = [row + dRow, col + dCol]
-        const key = next.join(',')
-
-        if (
-          seen.has(key) ||
-          next[0] < 1 ||
-          next[1] < 1 ||
-          next[0] > this.rows - 2 ||
-          next[1] > this.cols - 2 ||
-          this.blocked[next[0]][next[1]]
-        ) {
-          return
-        }
-
-        seen.add(key)
-        queue.push(next)
-      })
-    }
-
-    shape.forEach(([row, col]) => {
-      this.blocked[row][col] = false
-    })
-
-    return reached === open
   }
 
   paintShape(shape, asRock) {
@@ -511,9 +466,34 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
-    this.checkRoomEntry()
-    this.updateMovement(time)
+    // Paused: nothing but the menu's own keys is read, and update() does no work at all -
+    // no movement, no firing, no enemy thinking - on top of the frozen physics world.
+    if (this.pauseMenu) {
+      this.updatePauseMenu()
+      return
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+      this.openPauseMenu()
+      return
+    }
+
+    // DEBUG / TEMPORARY - see DEBUG_SHAPE_KEY above.
+    if (DEBUG_SHAPE_KEY && Phaser.Input.Keyboard.JustDown(this.debugShapeKey)) {
+      const at = DEBUG_SHAPE_CYCLE.indexOf(this.shape?.id)
+
+      this.scene.restart({
+        shape: DEBUG_SHAPE_CYCLE[(at + 1) % DEBUG_SHAPE_CYCLE.length],
+        plan: roomPlanFor(DEBUG_SHAPE_PLAN),
+        carried: { gameState: this.gameState, health: this.health }
+      })
+      return
+    }
+
+    this.checkRoomCleared()
+    this.updateMovement()
     this.updateEnemies(time)
+    this.updateEnemyPings()
     this.updateFiring(time)
     this.updateActives(time)
     this.updatePickupRearm()
@@ -528,11 +508,7 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  updateMovement(time) {
-    if (time < this.knockbackUntil) {
-      return
-    }
-
+  updateMovement() {
     const velocity = new Phaser.Math.Vector2(
       (this.wasd.D.isDown ? 1 : 0) - (this.wasd.A.isDown ? 1 : 0),
       (this.wasd.S.isDown ? 1 : 0) - (this.wasd.W.isDown ? 1 : 0)
@@ -543,15 +519,23 @@ export class PlayScene extends Phaser.Scene {
     this.player.body.setVelocity(velocity.x, velocity.y)
   }
 
-  checkRoomEntry() {
-    if (this.roomEntered || this.player.y > this.entryLine) {
+  // The room is live from the first frame. It used to wait for the player to walk up past
+  // an entry line, which handed them a free look at the layout and a doorway to read it
+  // from; now the fight starts where they are standing.
+  populateRoom() {
+    if (this.roomType === 'shop') {
+      this.openShop()
       return
     }
 
-    this.roomEntered = true
-    this.entryText.destroy()
-    this.spawnEnemy()
-    this.spawnTreasurePickup()
+    // Everything in the room comes off the plan the door resolved to: how many enemies,
+    // how tough they are and how cursed anything they drop will be.
+    // Nothing below this line knows which tag it came from.
+    for (let i = 0; i < this.roomPlan.enemyCount; i++) {
+      this.spawnEnemy()
+    }
+
+    this.announceRoom()
   }
 
   updateEnemies(time) {
@@ -565,6 +549,60 @@ export class PlayScene extends Phaser.Scene {
       this.physics.moveTo(enemy, target.x, target.y, ENEMY_SPEED)
       this.updateEnemyFiring(enemy, time)
     })
+  }
+
+  // ---- off-screen enemy pings ----------------------------------------------
+
+  // One arrow per off-screen enemy, on the edge of the screen, pointing at it. A big room
+  // is nearly three times the viewport, so on entry most of the room's enemies are out of
+  // sight and the last one alive can be a forty-second walk away with nothing to say where.
+  // Uncapped deliberately: the most a room ever spawns is nine, and hiding some of them
+  // would make the arrows a thing you cannot trust rather than a readout of what is left.
+  //
+  // Rectangular rooms never scroll, so nothing in them can be off-screen and they get
+  // none of this - not even the per-frame check.
+  updateEnemyPings() {
+    if (!this.shape) {
+      return
+    }
+
+    const view = this.cameras.main.worldView
+    const offScreen = this.enemies
+      .getChildren()
+      .filter((enemy) => !Phaser.Geom.Rectangle.Contains(view, enemy.x, enemy.y))
+
+    offScreen.forEach((enemy, index) => {
+      const angle = Phaser.Math.Angle.Between(view.centerX, view.centerY, enemy.x, enemy.y)
+      const offset = edgePoint(
+        angle,
+        this.scale.width / 2 - PING_MARGIN,
+        this.scale.height / 2 - PING_MARGIN
+      )
+
+      this.pingAt(index)
+        .setPosition(this.scale.width / 2 + offset.x, this.scale.height / 2 + offset.y)
+        .setRotation(angle)
+        .setVisible(true)
+    })
+
+    // The arrows outlive their enemies by a frame at most: whatever is not claimed above
+    // is hidden rather than destroyed, so a kill and a respawn cost no allocation.
+    for (let index = offScreen.length; index < this.pings.length; index++) {
+      this.pings[index].setVisible(false)
+    }
+  }
+
+  // Grown on demand and kept. Drawn pointing along +x so the rotation is the bearing to
+  // the enemy with nothing added to it.
+  pingAt(index) {
+    if (!this.pings[index]) {
+      this.pings[index] = this.add
+        .triangle(0, 0, 0, 0, 0, PING_SIZE, PING_SIZE, PING_SIZE / 2, PING_COLOR, PING_ALPHA)
+        .setScrollFactor(0)
+        .setDepth(HUD_DEPTH + 3)
+    }
+
+    return this.pings[index]
   }
 
   updateEnemyFiring(enemy, time) {
@@ -633,8 +671,10 @@ export class PlayScene extends Phaser.Scene {
     ]
   }
 
-  centreOf([row, col]) {
-    return new Phaser.Math.Vector2(col * CELL + CELL / 2, row * CELL + CELL / 2)
+  centreOf(cell) {
+    const { x, y } = cellCentre(cell, CELL)
+
+    return new Phaser.Math.Vector2(x, y)
   }
 
   // Always hand back somewhere to walk. The grid marks the whole 56 px border ring
@@ -757,21 +797,38 @@ export class PlayScene extends Phaser.Scene {
     return target
   }
 
-  // Line of sight for something the size of an enemy, tested against the actual tiles.
-  hasWalkLine(fromX, fromY, toX, toY) {
-    const line = new Phaser.Geom.Line(fromX, fromY, toX, toY)
+  // What stops something enemy-sized from walking a straight line, inflated by its own
+  // half-width once and kept: every tile here is static, so re-cloning them per frame was
+  // only ever buying the same answer again.
+  //
+  // Rocks and pits are the whole list in a rectangular room - its wall is convex, so no
+  // line between two points inside it can cross one. A shaped room's wall is not: the
+  // straight line from the foot of the L to the top of its arm runs through the void, and
+  // an enemy that trusted it would walk into the corner and stick there. So the wall
+  // joins the list exactly when the mask makes it able to lie.
+  cacheWalkBlockers() {
     const margin = ENEMY_SIZE / 2 + DETOUR_CLEARANCE
+    const tiles = [...this.rocks.getChildren(), ...this.pits.getChildren()]
 
-    return !this.obstacleBodies().some((tile) => {
+    if (this.shape) {
+      tiles.push(...this.walls.getChildren())
+    }
+
+    this.walkBlockers = tiles.map((tile) => {
       const bounds = Phaser.Geom.Rectangle.Clone(tile.getBounds())
       Phaser.Geom.Rectangle.Inflate(bounds, margin, margin)
 
-      return Phaser.Geom.Intersects.LineToRectangle(line, bounds)
+      return bounds
     })
   }
 
-  obstacleBodies() {
-    return [...this.rocks.getChildren(), ...this.pits.getChildren()]
+  // Line of sight for something the size of an enemy, tested against the actual tiles.
+  hasWalkLine(fromX, fromY, toX, toY) {
+    const line = new Phaser.Geom.Line(fromX, fromY, toX, toY)
+
+    return !this.walkBlockers.some((bounds) =>
+      Phaser.Geom.Intersects.LineToRectangle(line, bounds)
+    )
   }
 
   updateFiring(time) {
@@ -802,7 +859,7 @@ export class PlayScene extends Phaser.Scene {
       0xef4444
     )
     this.physics.add.existing(enemy)
-    enemy.hp = enemyHpFor(this.gameState.enemyStrength)
+    enemy.hp = enemyHpFor(this.gameState.enemyStrength + this.roomPlan.enemyStrengthBonus)
     enemy.nextShotAt = this.time.now + ENEMY_FIRE_COOLDOWN
     this.enemies.add(enemy)
   }
@@ -818,13 +875,8 @@ export class PlayScene extends Phaser.Scene {
           continue
         }
 
-        const point = new Phaser.Math.Vector2(
-          col * CELL + CELL / 2,
-          row * CELL + CELL / 2
-        )
-
-        if (this.isClearOfWalls(point)) {
-          open.push(point)
+        if (this.hasClearance(row, col)) {
+          open.push(this.centreOf([row, col]))
         }
       }
     }
@@ -836,19 +888,21 @@ export class PlayScene extends Phaser.Scene {
     return Phaser.Utils.Array.GetRandom(far.length ? far : open)
   }
 
-  isClearOfWalls(point) {
-    const footprint = new Phaser.Geom.Rectangle(
-      point.x - ENEMY_SIZE,
-      point.y - ENEMY_SIZE,
-      ENEMY_SIZE * 2,
-      ENEMY_SIZE * 2
-    )
+  // Room for something enemy-sized to stand. Its 72 px footprint reaches into all eight
+  // neighbouring cells, so a cell is clear exactly when its 3x3 block is open - which is
+  // what testing the footprint against every wall and obstacle body worked out to. Read
+  // off the grid now instead: a shaped room's wall is a hundred and fifty tiles rather
+  // than five long rectangles, and this runs once per free cell per spawn.
+  hasClearance(row, col) {
+    for (let r = row - 1; r <= row + 1; r++) {
+      for (let c = col - 1; c <= col + 1; c++) {
+        if (this.blocked[r]?.[c] !== false) {
+          return false
+        }
+      }
+    }
 
-    const solids = [...this.walls.getChildren(), ...this.obstacleBodies()]
-
-    return !solids.some((solid) =>
-      Phaser.Geom.Intersects.RectangleToRectangle(footprint, solid.getBounds())
-    )
+    return true
   }
 
   fire(aim) {
@@ -881,39 +935,50 @@ export class PlayScene extends Phaser.Scene {
     this.tweens.add({ targets: enemy, alpha: 0.3, duration: 60, yoyo: true })
   }
 
-  // Every death drops a reward pickup where the enemy stood - the only reward source
-  // for now, since there is one enemy and no waves yet.
+  // A kill always pays EXP and drops something only one time in ten - a heal, a safe
+  // treasure or a reward the room may have cursed. Enemies are the only source of items
+  // on the floor now that rooms no longer start with treasure laid out in them.
   killEnemy(enemy) {
     const { x, y } = enemy
     enemy.destroy()
-    this.spawnRewardPickup(x, y)
+    addExp(this.gameState, EXP_PER_KILL)
+
+    const drop = rollEnemyDrop(Math.random)
+
+    if (drop === 'heal') {
+      this.spawnHealPickup(x, y)
+    } else if (drop === 'treasure') {
+      this.spawnTreasurePickup(x, y)
+    } else if (drop === 'reward') {
+      this.spawnRewardPickup(x, y)
+    }
   }
 
   onEnemyTouchPlayer(player, enemy) {
-    this.takeHit(enemy.x, enemy.y)
+    this.takeHit()
   }
 
   onShotHitPlayer(player, shot) {
     shot.destroy()
-    this.takeHit(shot.x, shot.y)
+    this.takeHit()
   }
 
-  // Touches and shots cost the same 1 HP and share one i-frame window.
-  takeHit(fromX, fromY) {
+  // Touches and shots cost the same 1 HP and share one i-frame window. A hit costs health
+  // and nothing else: it used to shove the player 420 px/s away from what hit them and
+  // lock out the controls for 180 ms, which meant a hit taken mid-corridor decided where
+  // they ended up. The player now keeps whatever line they were walking, so the only
+  // trace of a hit is the HP bar and the flash.
+  takeHit() {
     const time = this.time.now
     if (this.gameOver || time < this.nextHitAt) {
       return
     }
 
     this.nextHitAt = time + HIT_COOLDOWN
-    this.knockbackUntil = time + KNOCKBACK_DURATION
 
-    const away = new Phaser.Math.Vector2(this.player.x - fromX, this.player.y - fromY)
-    if (away.length() === 0) {
-      away.set(0, -1)
-    }
-    away.normalize().scale(KNOCKBACK_SPEED)
-    this.player.body.setVelocity(away.x, away.y)
+    // The same flash an enemy gives when it is shot - with the shove gone this is the
+    // only thing that reads as a hit in the moment.
+    this.tweens.add({ targets: this.player, alpha: 0.3, duration: 60, yoyo: true })
 
     this.damagePlayer(DAMAGE_PER_HIT)
   }
@@ -975,7 +1040,7 @@ export class PlayScene extends Phaser.Scene {
       .setOrigin(0, 0)
 
     this.hpNodes = [track, ...this.hpSegments, this.hpLabel]
-    this.hpNodes.forEach((node) => node.setDepth(HUD_DEPTH))
+    this.hpNodes.forEach((node) => node.setDepth(HUD_DEPTH).setScrollFactor(0))
 
     this.refreshHealthBar()
   }
@@ -1051,10 +1116,11 @@ export class PlayScene extends Phaser.Scene {
     return new Phaser.Math.Vector2(x, y)
   }
 
+  // Weighted, not even: a passive already stacked twice comes up at a quarter of the odds
+  // of one never seen, so the pool keeps opening up as the run goes on.
   spawnRewardPickup(x, y) {
-    const pool = itemsFrom('reward')
-    const item = Phaser.Utils.Array.GetRandom(pool)
-    const isCursed = Phaser.Math.FloatBetween(0, 1) < CURSED_CHANCE
+    const item = this.rollFrom(itemsFrom('reward'))
+    const isCursed = Phaser.Math.FloatBetween(0, 1) < this.roomPlan.cursedChance
 
     this.addPickup(x, y, {
       kind: 'reward',
@@ -1065,15 +1131,381 @@ export class PlayScene extends Phaser.Scene {
   }
 
   // Rolled from the treasure pool, never cursed.
-  spawnTreasurePickup() {
-    const spot = this.pickSpawnPoint()
-
-    this.addPickup(spot.x, spot.y, {
+  spawnTreasurePickup(x, y) {
+    this.addPickup(x, y, {
       kind: 'treasure',
-      item: Phaser.Utils.Array.GetRandom(itemsFrom('treasure')),
+      item: this.rollFrom(itemsFrom('treasure')),
       isCursed: false,
       color: PICKUP_TREASURE_COLOR
     })
+  }
+
+  // The only healing outside the shop. It carries no item, so onPickup handles it before
+  // anything that reads one.
+  spawnHealPickup(x, y) {
+    this.addPickup(x, y, { kind: 'heal', color: PICKUP_HP_REFILL_COLOR })
+  }
+
+  // ---- shop room -----------------------------------------------------------
+
+  // Stock is rolled from what the player does not already own, so a shop never sells a
+  // duplicate it would have to refuse at the till.
+  // A shop is always safe to walk into, guarded or not - the one room the instant-spawn
+  // rule does not apply to. Its guards are held back until the player takes something.
+  openShop() {
+    const stock = rollShopStock(this.shopPool(), Math.random)
+
+    this.shelfSpots(stock.length).forEach((spot, index) =>
+      this.spawnShopPickup(spot, stock[index])
+    )
+
+    this.shopSpent = false
+
+    // A guarded shop is what the door's tier meant rather than a coin flip: an easy shop
+    // is quiet, a hard one is defended, and the glow said so before you walked in. Saying
+    // it out loud too means the toll is a decision rather than an ambush.
+    this.toast(
+      this.roomPlan.enemyCount > 0
+        ? 'SHOP - browse freely; buy one thing and the guards wake up'
+        : 'SHOP - browse freely; you may buy one thing',
+      this.roomPlan.enemyCount > 0 ? '#fb923c' : '#38bdf8'
+    )
+  }
+
+  // One purchase per visit. The rest of the shelf goes the moment the first thing is
+  // taken, and that same moment is what the guards were waiting for - a guarded shop
+  // charges its toll on the way out, not on the way in.
+  closeShop() {
+    this.shopSpent = true
+
+    this.pickups.getChildren().forEach((pickup) => {
+      if (pickup.spec.kind !== 'shop') {
+        return
+      }
+
+      pickup.spec.priceTag.destroy()
+      pickup.destroy()
+    })
+
+    if (this.roomPlan.enemyCount === 0) {
+      return
+    }
+
+    for (let i = 0; i < this.roomPlan.enemyCount; i++) {
+      this.spawnEnemy()
+    }
+
+    this.toast('the shop guards wake up - clear them to leave', '#fb923c')
+  }
+
+  // Only the unique tiers can be sold out from under the player. Passives stack, so a
+  // shop is happy to sell a second copy of one you are already wearing.
+  shopPool() {
+    const pool = ITEMS.filter(
+      (item) => item.slot === 'passive' || countOwned(this.gameState.inventory, item.id) === 0
+    )
+
+    return weightedPassivePool(this.gameState.inventory, pool)
+  }
+
+  // One weighted draw from a catalogue slice. Ownership is the only thing that moves the
+  // odds, so an item the player has never held draws at full weight, exactly as before.
+  rollFrom(pool) {
+    return pickWeighted(weightedPassivePool(this.gameState.inventory, pool), Math.random)
+  }
+
+  // One evenly spaced line across the room, so the stock reads as a shelf you walk along
+  // and every price tag has the same room as its neighbours. The room is bare floor in a
+  // shop, so there is nothing to place around.
+  shelfSpots(count) {
+    const { width } = this.scale
+    const left = SHOP_SHELF_MARGIN
+    const span = width - SHOP_SHELF_MARGIN * 2
+    const y = this.scale.height * SHOP_SHELF_Y
+    const step = span / count
+
+    return Array.from(
+      { length: count },
+      (_, index) => new Phaser.Math.Vector2(left + step * (index + 0.5), y)
+    )
+  }
+
+  spawnShopPickup(spot, entry) {
+    const price = priceOf(entry)
+    const colors = {
+      item: PICKUP_SHOP_ITEM_COLOR,
+      hp_refill: PICKUP_HP_REFILL_COLOR,
+      bomb_refill: PICKUP_BOMB_REFILL_COLOR
+    }
+
+    const pickup = this.addPickup(spot.x, spot.y, {
+      kind: 'shop',
+      entry,
+      price,
+      color: colors[entry.kind]
+    })
+
+    // The price rides under the box: a shop only works if the cost is visible before you
+    // walk into it, and there is no room for it inside a 24 px pickup. Name over price on
+    // two lines, so a long name stays inside its own slot on the shelf.
+    pickup.spec.priceTag = this.add
+      .text(spot.x, spot.y + PICKUP_SIZE, `${shopLabelFor(entry)}\n${price} EXP`, {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#e2e8f0',
+        align: 'center'
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(HUD_DEPTH)
+  }
+
+  // Walking into stock buys it. Nothing is charged unless the effect actually lands, so a
+  // full rack or a full health bar costs nothing - it just says why.
+  buyFromShop(pickup) {
+    const { entry, price } = pickup.spec
+
+    if (!canAfford(this.gameState, price)) {
+      this.refusePurchase(pickup, `${price} EXP - you have ${this.gameState.exp}`)
+      return
+    }
+
+    const result = this.applyPurchase(entry)
+
+    if (!result.success) {
+      this.refusePurchase(pickup, result.message)
+      return
+    }
+
+    spendExp(this.gameState, price)
+    pickup.spec.priceTag.destroy()
+    pickup.destroy()
+    this.refreshStats()
+
+    this.toast(`bought ${result.message} (-${price} EXP)`, '#a3e635')
+    console.log('[one-bomb-left] bought', entry.kind, 'exp left', this.gameState.exp)
+
+    // Only a purchase that actually landed closes the shop - a refusal above returns
+    // before this, so a full rack or an empty wallet leaves the shelf standing.
+    this.closeShop()
+  }
+
+  applyPurchase(entry) {
+    if (entry.kind === 'hp_refill') {
+      if (this.health >= this.stats.maxHp) {
+        return { success: false, message: 'already at full HP' }
+      }
+
+      this.health = this.stats.maxHp
+      this.refreshHealthBar()
+
+      return { success: true, message: 'HP Refill: back to full' }
+    }
+
+    if (entry.kind === 'bomb_refill') {
+      this.gameState.bombCount += 1
+
+      return { success: true, message: 'Bomb Refill: +1 bomb' }
+    }
+
+    const granted = grantItem(this.gameState, entry.item)
+
+    if (!granted.success) {
+      const reason = granted.reason === 'owned' ? 'already owned' : 'no room - free a slot first'
+
+      return { success: false, message: reason }
+    }
+
+    return { success: true, message: `${entry.item.name}: ${entry.item.effect}` }
+  }
+
+  // The overlap re-fires every frame while standing on the stock, so the refusal speaks on
+  // a cooldown. The box flashes with it - the toast alone reads as nothing having happened.
+  refusePurchase(pickup, message) {
+    if (this.time.now < (pickup.spec.nextRefusalAt ?? 0)) {
+      return
+    }
+
+    pickup.spec.nextRefusalAt = this.time.now + SHOP_DENY_COOLDOWN
+
+    this.tweens.add({ targets: pickup, alpha: 0.25, duration: 90, yoyo: true, repeat: 1 })
+    this.toast(`can't buy - ${message}`, '#f87171')
+  }
+
+  // ---- room exit -----------------------------------------------------------
+
+  // The exit opens the moment the room has nothing alive in it - and, in a shop, not
+  // before the visit is over: browsing is not the same as being finished.
+  checkRoomCleared() {
+    if (this.doors.length > 0 || this.enemies.getChildren().length > 0) {
+      return
+    }
+
+    if (!this.shopIsDone()) {
+      return
+    }
+
+    this.openDoors()
+  }
+
+  // A shop holds its exit shut until the visit is over, so a guarded one cannot be walked
+  // out of before its guards have been dealt with. The escape hatch is affordability: a
+  // player who cannot pay for anything on the shelf has no purchase to make, and EXP only
+  // comes from kills, so without this they would be sealed in a room with nothing to do.
+  shopIsDone() {
+    if (this.roomType !== 'shop' || this.shopSpent) {
+      return true
+    }
+
+    return !this.pickups
+      .getChildren()
+      .some((pickup) => pickup.spec.kind === 'shop' && canAfford(this.gameState, pickup.spec.price))
+  }
+
+  // 2-3 doors along the top wall, each advertising a reward type by colour and a
+  // difficulty by glow - and each already knowing, privately, what it actually leads to.
+  // The truth is rolled here rather than on the walk-in, so the room is settled before
+  // the player touches anything.
+  openDoors() {
+    const rolled = rollDoors(Math.random)
+    const spots = this.pickDoorSpots(rolled.length)
+
+    // The spots are the truth: a shaped room's exit tips seat what doorCapacity() said
+    // they would, so a roll of three onto a pair of narrow tips comes out as two.
+    this.doors = rolled
+      .slice(0, spots.length)
+      .map((door, index) => this.buildDoor(door, resolveDoor(door, Math.random), spots[index]))
+
+    this.toast(`room clear - ${this.doors.length} doors, pick one`, '#86efac')
+  }
+
+  buildDoor(advertised, actual, spot) {
+    const { color, label } = DOOR_STYLE[advertised.type]
+    const glow = TIER_GLOW[advertised.tier]
+
+    const pad = this.add.rectangle(spot.x, spot.y, EXIT_SIZE, EXIT_SIZE, color, glow.alpha)
+    pad.setStrokeStyle(glow.stroke, color)
+    this.physics.add.existing(pad)
+    pad.body.setAllowGravity(false)
+    pad.body.setImmovable(true)
+
+    const text = this.add
+      .text(spot.x, spot.y + EXIT_SIZE / 2 + 4, `${label}
+${advertised.tier}`, {
+        fontFamily: 'monospace',
+        fontSize: '13px',
+        color: '#e2e8f0',
+        align: 'center'
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(HUD_DEPTH)
+
+    // The pulse is the glow's other half: a hard door beats faster than an easy one.
+    const pulse = this.tweens.add({
+      targets: pad,
+      alpha: Math.min(1, glow.alpha + 0.35),
+      duration: glow.pulse,
+      yoyo: true,
+      repeat: -1
+    })
+
+    const door = { advertised, actual, pad, text, pulse }
+
+    this.physics.add.overlap(this.player, pad, () => this.takeDoor(door), null, this)
+
+    return door
+  }
+
+  // Evenly spaced across the top of the room, the same idea as the shop shelf, each pad
+  // snapped to the nearest cell the player can actually stand on.
+  pickDoorSpots(count) {
+    if (this.shape) {
+      return this.pickShapeDoorSpots(count)
+    }
+
+    const { width } = this.scale
+    const span = width - DOOR_MARGIN * 2
+    const step = span / count
+
+    return Array.from({ length: count }, (_, index) =>
+      this.nearestFreePoint(DOOR_MARGIN + step * (index + 0.5), DOOR_ROW_Y)
+    )
+  }
+
+  // A shaped room has its doors where the mask says they go: split between its exit tips
+  // by splitDoors(), then spread along each tip's wall run. L and Z have one tip and take
+  // whatever was rolled on it, exactly as the top wall of a rectangular room does; T and
+  // G have two, and the split is what lets a pair of doors land on either one or straddle
+  // both instead of always piling onto the first.
+  pickShapeDoorSpots(count) {
+    const split = splitDoors(this.shape, count, Math.random)
+
+    return this.shape.exits.flatMap((exit, index) =>
+      doorCells(this.shape, exit, split[index]).map((cell) => {
+        const { x, y } = this.centreOf(cell)
+
+        return this.nearestFreePoint(x, y)
+      })
+    )
+  }
+
+  // Snapped to the nearest cell the player can actually stand on, so a door never opens
+  // inside a rock or hard against a wall.
+  nearestFreePoint(x, y) {
+    const target = new Phaser.Math.Vector2(x, y)
+    let best = null
+    let bestDistance = Infinity
+
+    for (let row = 1; row < this.rows - 1; row++) {
+      for (let col = 1; col < this.cols - 1; col++) {
+        if (this.blocked[row][col]) {
+          continue
+        }
+
+        const point = this.centreOf([row, col])
+        const distance = Phaser.Math.Distance.BetweenPoints(point, target)
+
+        if (distance < bestDistance && this.hasClearance(row, col)) {
+          best = point
+          bestDistance = distance
+        }
+      }
+    }
+
+    return best ?? target
+  }
+
+  // Physics keeps firing the overlap while the player stands in it, and scene.restart()
+  // does not take effect until the end of the tick - so this has to be one-shot. The
+  // doors not taken are torn down first: the choice is made, there is no walking back.
+  takeDoor(door) {
+    if (this.leaving) {
+      return
+    }
+
+    this.leaving = true
+    this.doors.forEach((other) => this.closeDoor(other))
+
+    this.scene.restart({
+      plan: roomPlanFor(door.actual),
+      carried: { gameState: this.gameState, health: this.health }
+    })
+  }
+
+  closeDoor(door) {
+    door.pulse.stop()
+    door.pad.destroy()
+    door.text.destroy()
+  }
+
+  // What the room turned out to be, said once on entry - the only way the player learns
+  // whether the door they read was telling the truth.
+  announceRoom() {
+    const { label } = DOOR_STYLE[this.roomPlan.type]
+    // A big room says which shape it is, because it is the first thing about it that
+    // matters and the silhouette takes a walk to read from inside.
+    const shape = this.shape ? ` - ${this.shape.id} big room` : ''
+
+    this.toast(`${label} room - ${this.roomPlan.tier}${shape}`, '#cbd5e1')
   }
 
   addPickup(x, y, spec) {
@@ -1104,6 +1536,16 @@ export class PlayScene extends Phaser.Scene {
   onPickup(player, pickup) {
     // declined pickups and items just dropped underfoot stay inert until stepped off
     if (this.swap || pickup.spec.declined) {
+      return
+    }
+
+    if (pickup.spec.kind === 'shop') {
+      this.buyFromShop(pickup)
+      return
+    }
+
+    if (pickup.spec.kind === 'heal') {
+      this.takeHeal(pickup)
       return
     }
 
@@ -1138,9 +1580,32 @@ export class PlayScene extends Phaser.Scene {
     pickup.destroy()
     this.refreshStats()
 
+    // One trinket slot: the one it replaced goes back on the floor rather than vanishing,
+    // the same as an active displaced through the swap prompt.
+    if (result && result.displaced) {
+      this.dropItem(result.displaced)
+    }
+
     const curseNote = isCursed ? ' (CURSED)' : ''
     this.toast(`${item.name}: ${item.effect}${curseNote}`, isCursed ? '#c084fc' : '#67e8f9')
     console.log('[one-bomb-left] picked up', item.id, 'stats', this.stats)
+  }
+
+  // A heal is all-or-nothing, like the shop's refill. At full HP it is left on the floor
+  // rather than eaten for nothing - come back for it after the next hit.
+  takeHeal(pickup) {
+    if (this.health >= this.stats.maxHp) {
+      if (!pickup.spec.announcedOwned) {
+        pickup.spec.announcedOwned = true
+        this.toast('heal - already at full HP', '#94a3b8')
+      }
+      return
+    }
+
+    this.health = this.stats.maxHp
+    this.refreshHealthBar()
+    pickup.destroy()
+    this.toast('heal - back to full HP', '#f87171')
   }
 
   // Every stat is recomputed from the inventory, so a set bonus that no longer holds
@@ -1262,23 +1727,24 @@ export class PlayScene extends Phaser.Scene {
 
   // ---- item slots ----------------------------------------------------------
 
-  // 4 passive boxes over 3 active ones, top-right. Everything is a rectangle plus a
-  // short abbreviation - no art yet, but enough to read what is equipped, in which slot,
-  // and whether an active is ready.
+  // One trinket box and a running list of passives on the left, 3 active boxes on the
+  // right. Everything is a rectangle plus a short abbreviation - no art yet, but enough to
+  // read what is equipped, in which slot, and whether an active is ready.
   buildItemHud() {
     const { width, height } = this.scale
 
-    // Both rows live in the bottom wall band, split around the doorway gap: passives to
-    // the left of it, actives to the right. Nothing here covers a walkable tile.
+    // Both groups live in the bottom wall band, split around the doorway gap: the trinket
+    // and the passive list to the left of it, actives to the right. Nothing here covers a
+    // walkable tile.
     const keyHintY = height - WALL_THICKNESS + 2
     const rowY = height - WALL_THICKNESS + 16 + SLOT_SIZE / 2
-    const doorwayStart = (width - DOORWAY_WIDTH) / 2
 
     const label = (x, y, text, origin) =>
       this.add
         .text(x, y, text, { fontFamily: 'monospace', fontSize: '12px', color: '#cbd5e1' })
         .setOrigin(origin, 0.5)
         .setDepth(HUD_DEPTH)
+        .setScrollFactor(0)
 
     // The wall is a light slate, so each group gets a dark plate behind it - the boxes
     // and their dim labels are unreadable straight on the wall colour.
@@ -1293,24 +1759,32 @@ export class PlayScene extends Phaser.Scene {
           0.88
         )
         .setDepth(HUD_DEPTH - 1)
+        .setScrollFactor(0)
 
-    const passiveRowWidth = 4 * SLOT_SIZE + 3 * SLOT_GAP
-    const passiveLeft = HUD_EDGE_MARGIN + 74
-    plate(HUD_EDGE_MARGIN - 6, passiveLeft + passiveRowWidth + 8)
-    label(HUD_EDGE_MARGIN, rowY, 'PASSIVES', 0)
-    this.hudPassiveSlots = this.buildSlotRow(
-      passiveLeft + passiveRowWidth,
-      rowY,
-      keyHintY,
-      4,
-      false
-    )
+    // Only the trinket lives on the left now. The passive tier is uncapped and unbounded
+    // in width, so it was never going to read on a wall band - the pause menu spells it
+    // out in full names instead, and the plate here is cut back to the one slot it holds.
+    plate(HUD_EDGE_MARGIN - 6, HUD_EDGE_MARGIN + 138)
+    label(HUD_EDGE_MARGIN, rowY, 'TRINKET', 0)
+    this.hudTrinketSlot = this.buildSlotRow(HUD_EDGE_MARGIN + 130, rowY, keyHintY, 1, false)[0]
 
     const activeRowWidth = 3 * SLOT_SIZE + 2 * SLOT_GAP
     const activeRight = width - HUD_EDGE_MARGIN - 66
     plate(activeRight - activeRowWidth - 8, width - HUD_EDGE_MARGIN + 6)
     label(width - HUD_EDGE_MARGIN, rowY, 'ACTIVES', 1)
     this.hudActiveSlots = this.buildSlotRow(activeRight, rowY, keyHintY, 3, true)
+
+    // EXP rides the middle of the top band: clear of the hearts on the left and the
+    // status text on the right.
+    this.hudExpText = this.add
+      .text(width / 2, WALL_THICKNESS / 2, '', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#fbbf24'
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(HUD_DEPTH)
+      .setScrollFactor(0)
 
     // Status text goes in the top band beside the hearts, where there is room to spare.
     this.hudSetText = this.add
@@ -1321,10 +1795,7 @@ export class PlayScene extends Phaser.Scene {
       })
       .setOrigin(1, 0.5)
       .setDepth(HUD_DEPTH)
-
-    if (passiveLeft + passiveRowWidth + 8 > doorwayStart) {
-      console.warn('[one-bomb-left] item HUD overruns the doorway gap')
-    }
+      .setScrollFactor(0)
   }
 
   buildSlotRow(right, centreY, keyHintY, count, withKeyHints) {
@@ -1336,6 +1807,7 @@ export class PlayScene extends Phaser.Scene {
       const box = this.add
         .rectangle(x, centreY, SLOT_SIZE, SLOT_SIZE, SLOT_EMPTY_FILL)
         .setDepth(HUD_DEPTH)
+        .setScrollFactor(0)
       box.setStrokeStyle(2, SLOT_EMPTY_EDGE)
 
       // drawn from the bottom edge up, then scaled to whatever is left of the cooldown
@@ -1350,6 +1822,7 @@ export class PlayScene extends Phaser.Scene {
         )
         .setOrigin(0.5, 1)
         .setDepth(HUD_DEPTH + 1)
+        .setScrollFactor(0)
       veil.setScale(1, 0)
 
       const text = this.add
@@ -1360,6 +1833,7 @@ export class PlayScene extends Phaser.Scene {
         })
         .setOrigin(0.5)
         .setDepth(HUD_DEPTH + 2)
+        .setScrollFactor(0)
 
       const timer = this.add
         .text(x, centreY + SLOT_SIZE / 2 - 3, '', {
@@ -1369,6 +1843,7 @@ export class PlayScene extends Phaser.Scene {
         })
         .setOrigin(0.5, 1)
         .setDepth(HUD_DEPTH + 2)
+        .setScrollFactor(0)
 
       // the key that fires this slot, on its own line above the boxes
       if (withKeyHints) {
@@ -1380,6 +1855,7 @@ export class PlayScene extends Phaser.Scene {
           })
           .setOrigin(0.5, 0)
           .setDepth(HUD_DEPTH)
+          .setScrollFactor(0)
       }
 
       slots.push({ box, veil, text, timer })
@@ -1391,7 +1867,7 @@ export class PlayScene extends Phaser.Scene {
   refreshItemHud(time) {
     const { inventory, cooldowns } = this.gameState
 
-    inventory.passives.forEach((item, index) => this.paintSlot(this.hudPassiveSlots[index], item))
+    this.paintSlot(this.hudTrinketSlot, inventory.trinket)
 
     inventory.actives.forEach((item, index) => {
       const slot = this.hudActiveSlots[index]
@@ -1411,7 +1887,13 @@ export class PlayScene extends Phaser.Scene {
       slot.box.setStrokeStyle(2, cooling ? SLOT_FILLED_EDGE : SLOT_READY_EDGE)
     })
 
-    this.hudSetText.setText(this.stats.damage > 1 ? 'SET  +5% dmg' : '')
+    this.hudExpText.setText(
+      `EXP ${this.gameState.exp}   BOMBS ${this.gameState.bombCount}`
+    )
+    // Asked of the inventory rather than inferred from damage > 1: stacked passives raise
+    // damage on their own now, so that test lit the readout up with no set equipped.
+    const set = hasSetBonus(inventory, ...SET_BONUS.ids)
+    this.hudSetText.setText(set ? 'SET  +5% dmg' : '')
   }
 
   paintSlot(slot, item) {
@@ -1430,7 +1912,7 @@ export class PlayScene extends Phaser.Scene {
   // ---- swap prompt ---------------------------------------------------------
 
   openSwapPrompt(item, pickup) {
-    const { rack, slots } = swapOptions(this.gameState.inventory, item)
+    const { slots } = swapOptions(this.gameState.inventory)
     const { width, height } = this.scale
 
     this.player.body.setVelocity(0, 0)
@@ -1440,7 +1922,7 @@ export class PlayScene extends Phaser.Scene {
     const cursed = pickup.spec.isCursed
     const rows = [
       {
-        text: (rack === 'actives' ? 'ACTIVE' : 'PASSIVE') + ' SLOTS FULL',
+        text: 'ACTIVE SLOTS FULL',
         size: 25,
         color: '#fbbf24',
         gap: 44
@@ -1501,6 +1983,8 @@ export class PlayScene extends Phaser.Scene {
       )
       y += row.gap
     })
+
+    this.pinToScreen(this.swap.objects)
   }
 
   updateSwapPrompt() {
@@ -1552,6 +2036,194 @@ export class PlayScene extends Phaser.Scene {
     this.physics.resume()
   }
 
+  // ---- pause menu ----------------------------------------------------------
+
+  // A real pause, not a hidden overlay: physics.pause() freezes every body where it
+  // stands, and update() stops doing anything but reading the menu's keys. Cooldowns are
+  // wall-clock timestamps, though, and the clock keeps running while the menu is open -
+  // so the time spent paused is added back to every deadline on the way out, and the run
+  // picks up exactly where it left off rather than with everything suddenly off cooldown.
+  openPauseMenu() {
+    this.player.body.setVelocity(0, 0)
+    this.physics.pause()
+
+    this.pauseMenu = { index: 0, pausedAt: this.time.now, objects: [], entryTexts: [] }
+
+    this.buildPausePanel()
+    // Painted once with the frozen timestamp, so the cooldown timers stop counting down
+    // on the HUD behind the menu instead of running out while the game is not running.
+    this.refreshItemHud(this.pauseMenu.pausedAt)
+  }
+
+  buildPausePanel() {
+    const { width, height } = this.scale
+    const held = passiveCounts(this.gameState.inventory)
+
+    const rows = [
+      { text: 'PAUSED', size: 25, color: '#e2e8f0', gap: 46 }
+    ]
+
+    PAUSE_ENTRIES.forEach((entry, index) => {
+      rows.push({ text: entry.label, size: 19, color: '#e2e8f0', gap: 32, left: true, entry: index })
+    })
+
+    rows.push({ text: 'PASSIVES HELD', size: 14, color: '#94a3b8', gap: 30, left: true })
+
+    if (held.length === 0) {
+      rows.push({ text: 'none yet', size: 15, color: '#64748b', gap: 26, left: true })
+    }
+
+    // Full names here, not the three-letter HUD abbreviations - the menu is where a stack
+    // is meant to be readable, so the count and the effect ride along with it.
+    held.forEach(({ item, count }) => {
+      rows.push({
+        text: (count > 1 ? item.name + ' x' + count : item.name) + '  -  ' + item.effect,
+        size: 15,
+        color: '#cbd5e1',
+        gap: 26,
+        left: true
+      })
+    })
+
+    rows.push({ text: '', size: 12, color: '#000000', gap: 12 })
+    rows.push({
+      text: '[W/S or UP/DOWN] select   [ENTER] confirm   [ESC] resume',
+      size: 13,
+      color: '#94a3b8',
+      gap: 0
+    })
+
+    const panelHeight = rows.reduce((total, row) => total + row.gap, 0) + 74
+
+    const veil = this.add
+      .rectangle(width / 2, height / 2, width, height, 0x05070c, 0.74)
+      .setDepth(PROMPT_DEPTH)
+    const panel = this.add
+      .rectangle(width / 2, height / 2, PAUSE_PANEL_WIDTH, panelHeight, 0x111725)
+      .setDepth(PROMPT_DEPTH + 1)
+    panel.setStrokeStyle(2, 0x8792a6)
+    this.pauseMenu.objects.push(veil, panel)
+
+    let y = height / 2 - panelHeight / 2 + 34
+    const listLeft = width / 2 - PAUSE_PANEL_WIDTH / 2 + 52
+
+    rows.forEach((row) => {
+      const text = this.add
+        .text(row.left ? listLeft : width / 2, y, row.text, {
+          fontFamily: 'monospace',
+          fontSize: row.size + 'px',
+          color: row.color
+        })
+        .setOrigin(row.left ? 0 : 0.5, 0.5)
+        .setDepth(PROMPT_DEPTH + 2)
+
+      this.pauseMenu.objects.push(text)
+
+      if (row.entry !== undefined) {
+        this.pauseMenu.entryTexts[row.entry] = text
+      }
+
+      y += row.gap
+    })
+
+    this.pinToScreen(this.pauseMenu.objects)
+    this.paintPauseSelection()
+  }
+
+  // The cursor is redrawn rather than moved: two rows, so re-labelling both is simpler
+  // than keeping a marker object in step with them.
+  paintPauseSelection() {
+    this.pauseMenu.entryTexts.forEach((text, index) => {
+      const selected = index === this.pauseMenu.index
+
+      text.setText((selected ? '>  ' : '   ') + PAUSE_ENTRIES[index].label)
+      text.setColor(selected ? '#67e8f9' : '#94a3b8')
+    })
+  }
+
+  updatePauseMenu() {
+    const down = Phaser.Input.Keyboard.JustDown(this.wasd.S) ||
+      Phaser.Input.Keyboard.JustDown(this.cursors.down)
+    const up = Phaser.Input.Keyboard.JustDown(this.wasd.W) ||
+      Phaser.Input.Keyboard.JustDown(this.cursors.up)
+
+    if (down || up) {
+      const step = down ? 1 : -1
+      this.pauseMenu.index =
+        (this.pauseMenu.index + step + PAUSE_ENTRIES.length) % PAUSE_ENTRIES.length
+      this.paintPauseSelection()
+      return
+    }
+
+    // ESC is the way out as well as the way in, so the menu never traps the player on a
+    // highlighted Exit they did not mean to reach.
+    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+      this.closePauseMenu()
+      return
+    }
+
+    if (this.confirmKeys.some((key) => Phaser.Input.Keyboard.JustDown(key))) {
+      this.choosePauseEntry(PAUSE_ENTRIES[this.pauseMenu.index].id)
+    }
+  }
+
+  choosePauseEntry(id) {
+    if (id === 'resume') {
+      this.closePauseMenu()
+      return
+    }
+
+    // There is no title screen to exit to yet, so Exit abandons the run and starts a new
+    // one from a fresh combat room - restart() with no carried state, which is what the
+    // game-over R key already does. It is behind a highlight-then-ENTER, so it cannot be
+    // hit by a stray keypress. Point it at a menu scene once one exists.
+    this.closePauseMenu()
+    this.scene.restart()
+  }
+
+  closePauseMenu() {
+    this.shiftDeadlines(this.time.now - this.pauseMenu.pausedAt)
+    this.pauseMenu.objects.forEach((object) => object.destroy())
+    this.pauseMenu = null
+    this.physics.resume()
+  }
+
+  // Every deadline in the run is an absolute this.time.now stamp, so pushing them all
+  // forward by the paused duration is what "resume where you left off" means here: a
+  // 20 s active with 8 s left still has 8 s left, however long the menu was open.
+  shiftDeadlines(elapsed) {
+    this.nextFireAt += elapsed
+    this.nextHitAt += elapsed
+
+    const { cooldowns } = this.gameState
+    Object.keys(cooldowns).forEach((id) => {
+      cooldowns[id] += elapsed
+    })
+
+    this.enemies.getChildren().forEach((enemy) => {
+      if (enemy.nextShotAt !== undefined) {
+        enemy.nextShotAt += elapsed
+      }
+      if (enemy.pushedUntil !== undefined) {
+        enemy.pushedUntil += elapsed
+      }
+    })
+
+    this.pickups.getChildren().forEach((pickup) => {
+      if (pickup.spec.nextRefusalAt !== undefined) {
+        pickup.spec.nextRefusalAt += elapsed
+      }
+    })
+  }
+
+  // Anything that belongs to the screen rather than to the room: the HUD, the prompts,
+  // the game-over text. A shaped room is bigger than the viewport and the camera scrolls
+  // across it, so these have to sit still while it does. In a rectangular room the camera
+  // never moves and this changes nothing.
+  pinToScreen(objects) {
+    objects.forEach((object) => object.setScrollFactor(0))
+  }
+
   toast(message, color) {
     if (this.toastText) {
       this.toastText.destroy()
@@ -1564,6 +2236,7 @@ export class PlayScene extends Phaser.Scene {
         color
       })
       .setOrigin(0.5)
+      .setScrollFactor(0)
 
     this.tweens.add({
       targets: this.toastText,
@@ -1590,6 +2263,7 @@ export class PlayScene extends Phaser.Scene {
         color: '#f87171'
       })
       .setOrigin(0.5)
+      .setScrollFactor(0)
 
     this.add
       .text(width / 2, height / 2 + 40, 'press R to try again', {
@@ -1598,6 +2272,7 @@ export class PlayScene extends Phaser.Scene {
         color: '#94a3b8'
       })
       .setOrigin(0.5)
+      .setScrollFactor(0)
 
     this.input.keyboard.once('keydown-R', () => this.scene.restart())
   }

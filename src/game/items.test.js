@@ -1,16 +1,28 @@
 import { describe, expect, test } from 'vitest'
-import { ACTIVE_ITEMS, ITEMS, PASSIVE_ITEMS, getItem, itemsFrom } from './items.js'
+import {
+  ACTIVE_ITEMS,
+  ITEMS,
+  PASSIVE_ITEMS,
+  SET_BONUS,
+  TRINKET_ITEMS,
+  getItem,
+  itemsFrom
+} from './items.js'
 
 describe('item data', () => {
-  // Items are unique, so a rack can only fill if the catalogue is bigger than the rack -
-// and the swap prompt only fires when a further item turns up with the rack already
-  // full. Under these counts the prompt is unreachable in play, whatever the UI does.
-  test('there are enough passives to fill 4 slots and still find another', () => {
-    expect(PASSIVE_ITEMS.length).toBeGreaterThanOrEqual(5)
-  })
-
+  // Actives are unique and capped, so the rack can only fill - and the swap prompt only
+  // fire - if the catalogue holds more of them than the rack does. The passive tier is
+  // uncapped and stacks, so it has no such floor.
   test('there are enough actives to fill 3 slots and still find another', () => {
     expect(ACTIVE_ITEMS.length).toBeGreaterThanOrEqual(4)
+  })
+
+  test('there is at least one trinket to put in the one trinket slot', () => {
+    expect(TRINKET_ITEMS.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('the three tiers make up the whole catalogue and do not overlap', () => {
+    expect(TRINKET_ITEMS.length + PASSIVE_ITEMS.length + ACTIVE_ITEMS.length).toBe(ITEMS.length)
   })
 
   test('the original five items are still in the catalogue', () => {
@@ -33,9 +45,19 @@ describe('item data', () => {
     })
   })
 
-  test('passives are marked passive and actives are marked active', () => {
+  test('every item is marked with its own tier', () => {
+    TRINKET_ITEMS.forEach((item) => expect(item.slot).toBe('trinket'))
     PASSIVE_ITEMS.forEach((item) => expect(item.slot).toBe('passive'))
     ACTIVE_ITEMS.forEach((item) => expect(item.slot).toBe('active'))
+  })
+
+  test('heavy vest is the trinket', () => {
+    expect(getItem('heavy_vest').slot).toBe('trinket')
+  })
+
+  // The set moved to the active rack with the tier restructure.
+  test('the set bonus is a pair of actives', () => {
+    SET_BONUS.ids.forEach((id) => expect(getItem(id).slot).toBe('active'))
   })
 
   test('every active item has a cooldown, and second wind is the longer one', () => {

@@ -63,9 +63,9 @@ describe('takeReward with an item attached', () => {
 
   test('the add result is returned so a full rack can raise the swap prompt', () => {
     const gameState = itemState()
-    gameState.inventory.passives = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+    gameState.inventory.actives = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
 
-    const result = takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.1)
+    const result = takeReward(gameState, { isCursed: false, item: getItem('bulwark') }, () => 0.1)
 
     expect(result).toEqual({ success: false, reason: 'full' })
   })
@@ -94,26 +94,23 @@ describe('takeReward with an item attached', () => {
 
     skipReward(gameState, { isCursed: false, item: getItem('iron_plating') })
 
-    expect(gameState.inventory.passives).toEqual([null, null, null, null])
+    expect(gameState.inventory.passives).toEqual([])
   })
 
   // An item the player already holds is not a reward: nothing is placed, so nothing is
   // collected and no curse is paid for it.
+  // Uniqueness is per tier now, so 'already holds' is an active or the trinket. A
+  // duplicate passive is a legitimate reward - it stacks.
   describe('a reward carrying an item the player already holds', () => {
     test('reports owned and adds no duplicate', () => {
       const gameState = itemState()
-      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+      takeReward(gameState, { isCursed: false, item: getItem('bulwark') }, () => 0.9)
 
-      const result = takeReward(
-        gameState,
-        { isCursed: false, item: getItem('iron_plating') },
-        () => 0.9
-      )
+      const result = takeReward(gameState, { isCursed: false, item: getItem('bulwark') }, () => 0.9)
 
       expect(result).toEqual({ success: false, reason: 'owned' })
-      expect(gameState.inventory.passives.map((item) => item && item.id)).toEqual([
-        'iron_plating',
-        null,
+      expect(gameState.inventory.actives.map((item) => item && item.id)).toEqual([
+        'bulwark',
         null,
         null
       ])
@@ -121,21 +118,31 @@ describe('takeReward with an item attached', () => {
 
     test('does not count toward rewardsCollected', () => {
       const gameState = itemState()
-      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+      takeReward(gameState, { isCursed: false, item: getItem('bulwark') }, () => 0.9)
 
-      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+      takeReward(gameState, { isCursed: false, item: getItem('bulwark') }, () => 0.9)
 
       expect(gameState.rewardsCollected).toBe(1)
     })
 
     test('pays no curse even when the pickup was cursed', () => {
       const gameState = itemState()
-      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+      takeReward(gameState, { isCursed: false, item: getItem('bulwark') }, () => 0.9)
 
-      takeReward(gameState, { isCursed: true, item: getItem('iron_plating') }, () => 0.9)
+      takeReward(gameState, { isCursed: true, item: getItem('bulwark') }, () => 0.9)
 
       expect(gameState.enemyStrength).toBe(0)
       expect(gameState.riskLevel).toBe(0)
+    })
+
+    test('a duplicate passive is taken and counted - passives stack', () => {
+      const gameState = itemState()
+      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+
+      takeReward(gameState, { isCursed: false, item: getItem('iron_plating') }, () => 0.9)
+
+      expect(gameState.inventory.passives).toHaveLength(2)
+      expect(gameState.rewardsCollected).toBe(2)
     })
   })
 
@@ -145,13 +152,9 @@ describe('takeReward with an item attached', () => {
   describe('a reward that cannot be placed yet', () => {
     test('a full rack collects nothing and pays no curse', () => {
       const gameState = itemState()
-      gameState.inventory.passives = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+      gameState.inventory.actives = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
 
-      const result = takeReward(
-        gameState,
-        { isCursed: true, item: getItem('iron_plating') },
-        () => 0.1
-      )
+      const result = takeReward(gameState, { isCursed: true, item: getItem('bulwark') }, () => 0.1)
 
       expect(result).toEqual({ success: false, reason: 'full' })
       expect(gameState.rewardsCollected).toBe(0)

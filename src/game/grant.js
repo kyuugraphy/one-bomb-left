@@ -1,21 +1,32 @@
-import { addActive, addPassive, hasItem } from './inventory.js'
+import { addActive, addPassive, countOwned, setTrinket } from './inventory.js'
 
-// Routes an item to the right rack by its `slot` field. Returns the add result untouched,
-// so a { success: false, reason: 'full' } still reaches the caller and can raise the
-// swap prompt rather than being swallowed here.
+// Routes an item to its tier by the `slot` field, and returns the tier's own result
+// untouched - so a { success: false, reason: 'full' } active still reaches the caller and
+// can raise the swap prompt rather than being swallowed here.
 //
-// Items are unique. A duplicate passive would stack numerically (two Iron Platings read
-// as +2 max HP), and a duplicate active would be dead weight, because cooldowns are keyed
-// by item id - both copies would share one timer. So one rule covers both racks.
+// Uniqueness is per tier, not global. The trinket and the actives are unique: a duplicate
+// active would be dead weight, because cooldowns are keyed by item id, so both copies
+// would share one timer. Passives are deliberately not unique - duplicates stack in
+// computeStats, which is the point of an uncapped tier.
 //
 // 'owned' is checked before the rack is: there is no new item to place, so this must not
 // raise the swap prompt that a genuinely full rack does.
 export function grantItem(gameState, item) {
-  if (hasItem(gameState.inventory, item.id)) {
+  const inventory = gameState.inventory
+
+  if (item.slot === 'passive') {
+    return addPassive(inventory, item)
+  }
+
+  if (countOwned(inventory, item.id) > 0) {
     return { success: false, reason: 'owned' }
   }
 
-  const add = item.slot === 'active' ? addActive : addPassive
+  // One slot, so a trinket is never refused - it replaces, and hands back what it
+  // displaced for the scene to drop on the floor.
+  if (item.slot === 'trinket') {
+    return { success: true, displaced: setTrinket(inventory, item) }
+  }
 
-  return add(gameState.inventory, item)
+  return addActive(inventory, item)
 }

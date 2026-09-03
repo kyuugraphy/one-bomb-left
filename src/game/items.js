@@ -1,5 +1,23 @@
 // Item data. `effect` is the line shown to the player; the numeric fields next to it are
 // what computeStats() actually reads, so adding an item never means editing effects.js.
+//
+// `slot` is the tier: 'trinket' (one unique slot), 'passive' (uncapped, stacks) or
+// 'active' (three unique slots). computeStats reads the trinket and the passives; only
+// actives carry a cooldown.
+export const TRINKET_ITEMS = [
+  // The one item that costs something to wear, so the single trinket slot is a real
+  // decision rather than a free upgrade.
+  {
+    id: 'heavy_vest',
+    name: 'Heavy Vest',
+    slot: 'trinket',
+    source: 'treasure',
+    effect: '+2 max HP, -10% move speed',
+    maxHpBonus: 2,
+    moveSpeedMultiplier: 0.9
+  }
+]
+
 export const PASSIVE_ITEMS = [
   {
     id: 'iron_plating',
@@ -40,17 +58,6 @@ export const PASSIVE_ITEMS = [
     source: 'reward',
     effect: '-35ms fire cooldown',
     fireCooldownBonus: -35
-  },
-  // The one item that costs something to wear, so a full rack is a real decision rather
-  // than a queue of upgrades.
-  {
-    id: 'heavy_vest',
-    name: 'Heavy Vest',
-    slot: 'passive',
-    source: 'treasure',
-    effect: '+2 max HP, -10% move speed',
-    maxHpBonus: 2,
-    moveSpeedMultiplier: 0.9
   }
 ]
 
@@ -89,11 +96,13 @@ export const ACTIVE_ITEMS = [
   }
 ]
 
-export const ITEMS = [...PASSIVE_ITEMS, ...ACTIVE_ITEMS]
+export const ITEMS = [...TRINKET_ITEMS, ...PASSIVE_ITEMS, ...ACTIVE_ITEMS]
 
-// iron_plating + steady_boots worn together sharpen every bullet.
+// panic_button + bulwark equipped together sharpen every bullet. The set moved to the
+// active rack with the tier restructure: passives are uncapped now, so a set built from
+// them would be something you collect rather than something you choose.
 export const SET_BONUS = {
-  ids: ['iron_plating', 'steady_boots'],
+  ids: ['panic_button', 'bulwark'],
   damageMultiplier: 1.05
 }
 

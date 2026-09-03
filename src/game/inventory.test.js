@@ -1,229 +1,309 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   addActive,
   addPassive,
+  countOwned,
   createInventory,
-  hasItem,
   hasSetBonus,
-  swapActive,
-  swapPassive
+  passiveCounts,
+  setTrinket,
+  swapActive
 } from './inventory.js'
-import { getItem } from './items.js'
 
 describe('createInventory', () => {
-  test('a new inventory has 4 empty passive slots', () => {
-    const inventory = createInventory()
-
-    expect(inventory.passives).toEqual([null, null, null, null])
+  it('starts with an empty trinket slot', () => {
+    expect(createInventory().trinket).toBe(null)
   })
 
-  test('a new inventory has 3 empty active slots', () => {
-    const inventory = createInventory()
+  it('starts with no passives at all', () => {
+    expect(createInventory().passives).toEqual([])
+  })
 
-    expect(inventory.actives).toEqual([null, null, null])
+  it('starts with three empty active slots', () => {
+    expect(createInventory().actives).toEqual([null, null, null])
+  })
+
+  it('hands out a fresh object each call', () => {
+    const first = createInventory()
+    first.passives.push({ id: 'a' })
+
+    expect(createInventory().passives).toEqual([])
+  })
+})
+
+describe('setTrinket', () => {
+  it('puts a trinket in the empty slot', () => {
+    const inventory = createInventory()
+    setTrinket(inventory, { id: 'heavy_vest' })
+
+    expect(inventory.trinket).toEqual({ id: 'heavy_vest' })
+  })
+
+  it('returns null when the slot was empty', () => {
+    expect(setTrinket(createInventory(), { id: 'heavy_vest' })).toBe(null)
+  })
+
+  it('replaces the trinket that was there', () => {
+    const inventory = createInventory()
+    setTrinket(inventory, { id: 'heavy_vest' })
+    setTrinket(inventory, { id: 'lucky_coin' })
+
+    expect(inventory.trinket).toEqual({ id: 'lucky_coin' })
+  })
+
+  it('hands back the trinket it displaced', () => {
+    const inventory = createInventory()
+    setTrinket(inventory, { id: 'heavy_vest' })
+
+    expect(setTrinket(inventory, { id: 'lucky_coin' })).toEqual({ id: 'heavy_vest' })
   })
 })
 
 describe('addPassive', () => {
-  test('an item goes into the first empty passive slot', () => {
+  it('pushes the passive onto the list', () => {
     const inventory = createInventory()
+    addPassive(inventory, { id: 'sharp_rounds' })
 
-    const result = addPassive(inventory, { id: 'thorns' })
-
-    expect(inventory.passives[0]).toEqual({ id: 'thorns' })
-    expect(result).toEqual({ success: true, slot: 0 })
+    expect(inventory.passives).toEqual([{ id: 'sharp_rounds' }])
   })
 
-  test('a second item goes into the slot after the first', () => {
+  it('keeps them in the order they were picked up', () => {
     const inventory = createInventory()
+    addPassive(inventory, { id: 'sharp_rounds' })
+    addPassive(inventory, { id: 'steady_boots' })
 
-    addPassive(inventory, { id: 'thorns' })
-    const result = addPassive(inventory, { id: 'boots' })
-
-    expect(inventory.passives[1]).toEqual({ id: 'boots' })
-    expect(result).toEqual({ success: true, slot: 1 })
+    expect(inventory.passives.map((item) => item.id)).toEqual(['sharp_rounds', 'steady_boots'])
   })
 
-  test('an item fills a gap left by an earlier slot', () => {
+  it('allows duplicates - they are meant to stack', () => {
     const inventory = createInventory()
-    inventory.passives = [null, { id: 'boots' }, null, null]
+    addPassive(inventory, { id: 'sharp_rounds' })
+    addPassive(inventory, { id: 'sharp_rounds' })
 
-    const result = addPassive(inventory, { id: 'thorns' })
-
-    expect(inventory.passives[0]).toEqual({ id: 'thorns' })
-    expect(result).toEqual({ success: true, slot: 0 })
+    expect(inventory.passives).toHaveLength(2)
   })
 
-  test('adding to 4 full passive slots reports full and changes nothing', () => {
+  it('never runs out of room', () => {
     const inventory = createInventory()
-    const full = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
-    inventory.passives = [...full]
 
-    const result = addPassive(inventory, { id: 'e' })
+    for (let i = 0; i < 50; i++) {
+      expect(addPassive(inventory, { id: 'sharp_rounds' })).toEqual({ success: true })
+    }
 
-    expect(result).toEqual({ success: false, reason: 'full' })
-    expect(inventory.passives).toEqual(full)
+    expect(inventory.passives).toHaveLength(50)
   })
 })
 
 describe('addActive', () => {
-  test('an item goes into the first empty active slot', () => {
+  it('fills the first empty slot', () => {
     const inventory = createInventory()
 
-    const result = addActive(inventory, { id: 'dash' })
-
-    expect(inventory.actives[0]).toEqual({ id: 'dash' })
-    expect(result).toEqual({ success: true, slot: 0 })
+    expect(addActive(inventory, { id: 'bulwark' })).toEqual({ success: true, slot: 0 })
+    expect(inventory.actives[0]).toEqual({ id: 'bulwark' })
   })
 
-  test('adding to 3 full active slots reports full and changes nothing', () => {
+  it('reuses a gap left by a swap rather than appending', () => {
     const inventory = createInventory()
-    const full = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
-    inventory.actives = [...full]
+    addActive(inventory, { id: 'bulwark' })
+    addActive(inventory, { id: 'repair_kit' })
+    inventory.actives[0] = null
 
-    const result = addActive(inventory, { id: 'd' })
-
-    expect(result).toEqual({ success: false, reason: 'full' })
-    expect(inventory.actives).toEqual(full)
+    expect(addActive(inventory, { id: 'panic_button' })).toEqual({ success: true, slot: 0 })
   })
 
-  test('adding an active leaves the passive slots untouched', () => {
+  it('refuses once all three slots are taken', () => {
     const inventory = createInventory()
+    addActive(inventory, { id: 'bulwark' })
+    addActive(inventory, { id: 'repair_kit' })
+    addActive(inventory, { id: 'panic_button' })
 
-    addActive(inventory, { id: 'dash' })
-
-    expect(inventory.passives).toEqual([null, null, null, null])
-  })
-})
-
-describe('swapPassive', () => {
-  test('the new item takes the slot', () => {
-    const inventory = createInventory()
-    inventory.passives = [{ id: 'thorns' }, null, null, null]
-
-    swapPassive(inventory, 0, { id: 'boots' })
-
-    expect(inventory.passives[0]).toEqual({ id: 'boots' })
+    expect(addActive(inventory, { id: 'second_wind' })).toEqual({
+      success: false,
+      reason: 'full'
+    })
   })
 
-  test('the item that was in the slot is returned', () => {
+  it('mutates nothing when it refuses', () => {
     const inventory = createInventory()
-    inventory.passives = [null, { id: 'thorns' }, null, null]
+    addActive(inventory, { id: 'bulwark' })
+    addActive(inventory, { id: 'repair_kit' })
+    addActive(inventory, { id: 'panic_button' })
+    addActive(inventory, { id: 'second_wind' })
 
-    const dropped = swapPassive(inventory, 1, { id: 'boots' })
-
-    expect(dropped).toEqual({ id: 'thorns' })
-  })
-
-  test('swapping into an empty slot returns null', () => {
-    const inventory = createInventory()
-
-    const dropped = swapPassive(inventory, 2, { id: 'boots' })
-
-    expect(dropped).toBeNull()
-    expect(inventory.passives[2]).toEqual({ id: 'boots' })
-  })
-
-  test('the other passive slots are left alone', () => {
-    const inventory = createInventory()
-    inventory.passives = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
-
-    swapPassive(inventory, 2, { id: 'e' })
-
-    expect(inventory.passives).toEqual([{ id: 'a' }, { id: 'b' }, { id: 'e' }, { id: 'd' }])
+    expect(inventory.actives.map((item) => item.id)).toEqual([
+      'bulwark',
+      'repair_kit',
+      'panic_button'
+    ])
   })
 })
 
 describe('swapActive', () => {
-  test('the new item takes the slot and the old one is returned', () => {
+  it('overwrites the slot it is pointed at', () => {
     const inventory = createInventory()
-    inventory.actives = [null, { id: 'dash' }, null]
+    addActive(inventory, { id: 'bulwark' })
+    swapActive(inventory, 0, { id: 'repair_kit' })
 
-    const dropped = swapActive(inventory, 1, { id: 'shield' })
-
-    expect(inventory.actives[1]).toEqual({ id: 'shield' })
-    expect(dropped).toEqual({ id: 'dash' })
+    expect(inventory.actives[0]).toEqual({ id: 'repair_kit' })
   })
 
-  test('swapping an active leaves the passive slots untouched', () => {
+  it('returns the active it displaced', () => {
     const inventory = createInventory()
-    inventory.passives = [{ id: 'thorns' }, null, null, null]
+    addActive(inventory, { id: 'bulwark' })
 
-    swapActive(inventory, 0, { id: 'shield' })
+    expect(swapActive(inventory, 0, { id: 'repair_kit' })).toEqual({ id: 'bulwark' })
+  })
 
-    expect(inventory.passives).toEqual([{ id: 'thorns' }, null, null, null])
+  it('returns null when the slot was empty', () => {
+    expect(swapActive(createInventory(), 2, { id: 'repair_kit' })).toBe(null)
+  })
+
+  it('leaves the other slots alone', () => {
+    const inventory = createInventory()
+    addActive(inventory, { id: 'bulwark' })
+    addActive(inventory, { id: 'repair_kit' })
+    swapActive(inventory, 1, { id: 'panic_button' })
+
+    expect(inventory.actives[0]).toEqual({ id: 'bulwark' })
+    expect(inventory.actives[2]).toBe(null)
+  })
+})
+
+describe('countOwned', () => {
+  it('counts none when the passive was never picked up', () => {
+    expect(countOwned(createInventory(), 'sharp_rounds')).toBe(0)
+  })
+
+  it('counts a single copy', () => {
+    const inventory = createInventory()
+    addPassive(inventory, { id: 'sharp_rounds' })
+
+    expect(countOwned(inventory, 'sharp_rounds')).toBe(1)
+  })
+
+  it('counts every copy of a stacked passive', () => {
+    const inventory = createInventory()
+    addPassive(inventory, { id: 'sharp_rounds' })
+    addPassive(inventory, { id: 'sharp_rounds' })
+    addPassive(inventory, { id: 'sharp_rounds' })
+
+    expect(countOwned(inventory, 'sharp_rounds')).toBe(3)
+  })
+
+  it('does not count a different passive', () => {
+    const inventory = createInventory()
+    addPassive(inventory, { id: 'steady_boots' })
+    addPassive(inventory, { id: 'sharp_rounds' })
+
+    expect(countOwned(inventory, 'sharp_rounds')).toBe(1)
+  })
+
+  it('counts an equipped active as owned', () => {
+    const inventory = createInventory()
+    addActive(inventory, { id: 'bulwark' })
+
+    expect(countOwned(inventory, 'bulwark')).toBe(1)
+  })
+
+  it('counts the worn trinket as owned', () => {
+    const inventory = createInventory()
+    setTrinket(inventory, { id: 'heavy_vest' })
+
+    expect(countOwned(inventory, 'heavy_vest')).toBe(1)
   })
 })
 
 describe('hasSetBonus', () => {
-  test('both ids present in passives is a set bonus', () => {
+  it('holds when both actives are equipped', () => {
     const inventory = createInventory()
-    inventory.passives = [{ id: 'thorns' }, null, { id: 'boots' }, null]
+    addActive(inventory, { id: 'panic_button' })
+    addActive(inventory, { id: 'bulwark' })
 
-    expect(hasSetBonus(inventory, 'thorns', 'boots')).toBe(true)
+    expect(hasSetBonus(inventory, 'panic_button', 'bulwark')).toBe(true)
   })
 
-  test('the id order does not matter', () => {
+  it('holds whichever order they were equipped in', () => {
     const inventory = createInventory()
-    inventory.passives = [{ id: 'thorns' }, null, { id: 'boots' }, null]
+    addActive(inventory, { id: 'bulwark' })
+    addActive(inventory, { id: 'panic_button' })
 
-    expect(hasSetBonus(inventory, 'boots', 'thorns')).toBe(true)
+    expect(hasSetBonus(inventory, 'panic_button', 'bulwark')).toBe(true)
   })
 
-  test('only one of the two ids present is no set bonus', () => {
+  it('breaks when one of the pair is missing', () => {
     const inventory = createInventory()
-    inventory.passives = [{ id: 'thorns' }, null, null, null]
+    addActive(inventory, { id: 'panic_button' })
 
-    expect(hasSetBonus(inventory, 'thorns', 'boots')).toBe(false)
+    expect(hasSetBonus(inventory, 'panic_button', 'bulwark')).toBe(false)
   })
 
-  test('an empty inventory has no set bonus', () => {
+  it('breaks when the pair is swapped out', () => {
     const inventory = createInventory()
+    addActive(inventory, { id: 'panic_button' })
+    addActive(inventory, { id: 'bulwark' })
+    swapActive(inventory, 1, { id: 'repair_kit' })
 
-    expect(hasSetBonus(inventory, 'thorns', 'boots')).toBe(false)
+    expect(hasSetBonus(inventory, 'panic_button', 'bulwark')).toBe(false)
   })
 
-  test('an id held in an active slot does not count', () => {
+  it('is actives-only - a passive with the same id does not count', () => {
     const inventory = createInventory()
-    inventory.passives = [{ id: 'thorns' }, null, null, null]
-    inventory.actives = [{ id: 'boots' }, null, null]
+    addActive(inventory, { id: 'panic_button' })
+    addPassive(inventory, { id: 'bulwark' })
 
-    expect(hasSetBonus(inventory, 'thorns', 'boots')).toBe(false)
+    expect(hasSetBonus(inventory, 'panic_button', 'bulwark')).toBe(false)
+  })
+
+  it('does not count the trinket either', () => {
+    const inventory = createInventory()
+    addActive(inventory, { id: 'panic_button' })
+    setTrinket(inventory, { id: 'bulwark' })
+
+    expect(hasSetBonus(inventory, 'panic_button', 'bulwark')).toBe(false)
   })
 })
 
-describe('hasItem', () => {
-  test('an empty inventory holds nothing', () => {
-    expect(hasItem(createInventory(), 'iron_plating')).toBe(false)
+describe('passiveCounts', () => {
+  const iron = { id: 'iron_plating', name: 'Iron Plating' }
+  const sharp = { id: 'sharp_rounds', name: 'Sharp Rounds' }
+
+  it('counts nothing on an empty list', () => {
+    expect(passiveCounts(createInventory())).toEqual([])
   })
 
-  test('a passive in the rack is held', () => {
+  it('reports a single passive once', () => {
     const inventory = createInventory()
-    addPassive(inventory, getItem('iron_plating'))
+    addPassive(inventory, iron)
 
-    expect(hasItem(inventory, 'iron_plating')).toBe(true)
+    expect(passiveCounts(inventory)).toEqual([{ item: iron, count: 1 }])
   })
 
-  test('an active in the rack is held', () => {
+  it('folds stacked copies into one row with a count', () => {
     const inventory = createInventory()
-    addActive(inventory, getItem('panic_button'))
+    addPassive(inventory, sharp)
+    addPassive(inventory, sharp)
+    addPassive(inventory, sharp)
 
-    expect(hasItem(inventory, 'panic_button')).toBe(true)
+    expect(passiveCounts(inventory)).toEqual([{ item: sharp, count: 3 }])
   })
 
-  test('an item the player does not carry is not held', () => {
+  it('keeps the order the passives were first picked up in', () => {
     const inventory = createInventory()
-    addPassive(inventory, getItem('iron_plating'))
+    addPassive(inventory, sharp)
+    addPassive(inventory, iron)
+    addPassive(inventory, sharp)
 
-    expect(hasItem(inventory, 'steady_boots')).toBe(false)
+    expect(passiveCounts(inventory)).toEqual([
+      { item: sharp, count: 2 },
+      { item: iron, count: 1 }
+    ])
   })
 
-  test('an item swapped out is no longer held', () => {
+  it('ignores the trinket and the actives - the passive tier only', () => {
     const inventory = createInventory()
-    addPassive(inventory, getItem('iron_plating'))
-    swapPassive(inventory, 0, getItem('steady_boots'))
+    setTrinket(inventory, iron)
+    addActive(inventory, sharp)
 
-    expect(hasItem(inventory, 'iron_plating')).toBe(false)
-    expect(hasItem(inventory, 'steady_boots')).toBe(true)
+    expect(passiveCounts(inventory)).toEqual([])
   })
 })
