@@ -13,7 +13,7 @@ import { grantItem } from './grant.js'
 import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
 import { collectReward, takeReward } from './rewards.js'
-import { canAfford, priceOf, rollShopStock } from './shop.js'
+import { canAfford, priceOf, rollShopStock, sellableItems } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
 import { freshGameState, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
@@ -40,6 +40,12 @@ const MUZZLE_OFFSET = PLAYER_SIZE / 2 + BULLET_RADIUS
 const ENEMY_SIZE = 36
 const ENEMY_SPEED = 120
 const ENEMY_BASE_HP = 10
+// Slug Step's enemy. It crawls at a share of the player's *current* speed, so a run that
+// buys boots is chased faster and a run that picks up Sluggish is chased slower - the
+// debuff scales with you rather than being outrun and forgotten. It never shoots; the
+// only way it hurts you is by catching you.
+const SLUG_SPEED_SHARE = 0.3
+const SLUG_COLOR = 0x9333ea
 const EXP_PER_KILL = 2
 const ENEMY_SHOT_SPEED = PLAYER_SPEED * 0.65
 const ENEMY_SHOT_RADIUS = 7
@@ -81,7 +87,6 @@ const WALL_THICKNESS = CELL
 const ROCK_COLOR = 0x6b7280
 const PIT_COLOR = 0x05060a
 const PICKUP_SIZE = 24
-const PICKUP_REWARD_COLOR = 0x22d3ee
 const PICKUP_CURSED_COLOR = 0xa855f7
 const PICKUP_TREASURE_COLOR = 0xfbbf24
 const PICKUP_DROPPED_COLOR = 0x94a3b8
@@ -119,7 +124,7 @@ const DEBUG_SHAPE_KEY = true
 const DEBUG_SHAPE_CYCLE = ['L', 'Z', 'T', 'G']
 // A packed room, not the entrance's single enemy: the point of walking the L is watching
 // several of them find their way round its corner.
-const DEBUG_SHAPE_PLAN = { type: 'combat_heavy', tier: 'medium' }
+const DEBUG_SHAPE_PLAN = { type: 'risky_reward', tier: 'medium' }
 
 if (DEBUG_SHAPE_KEY) {
   console.warn(
@@ -371,8 +376,10 @@ export class PlayScene extends Phaser.Scene {
     }
 
     // A shop is bare floor: the stock is laid out on one line, and rocks and pits would
-    // only break that line up and give a guarded shop cover to shoot you from.
-    if (this.roomType === 'shop') {
+    // only break that line up and give a guarded shop cover to shoot you from. A puzzle
+    // room is bare for now because it is a stub - whatever goes in it will bring its own
+    // geometry, and rolled clutter would only be in the way of it.
+    if (this.roomType === 'shop' || this.roomType === 'puzzle') {
       this.coverage = 0
       return
     }
@@ -526,11 +533,19 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
-    // Everything in the room comes off the plan the door resolved to: how many enemies,
-    // how tough they are and how cursed anything they drop will be.
+    // Everything in the room comes off the plan the door resolved to: how many enemies and
+    // how tough they are. A puzzle room's plan says none, which is the whole of the stub.
     // Nothing below this line knows which tag it came from.
     for (let i = 0; i < this.roomPlan.enemyCount; i++) {
       this.spawnEnemy()
+    }
+
+    // Slug Step is carried, not rolled: one slug per copy held, in every room the player
+    // fights in - including an otherwise empty puzzle room, because the slug is something
+    // they brought with them rather than something the room generated. The shop is the
+    // exception, for the same reason its own guards hold off: a shop is safe to walk into.
+    for (let i = 0; i < countOwned(this.gameState.inventory, 'slug_step'); i++) {
+      this.spawnSlug()
     }
 
     this.announceRoom()
@@ -544,7 +559,11 @@ export class PlayScene extends Phaser.Scene {
       }
 
       const target = this.chaseTargetFor(enemy)
-      this.physics.moveTo(enemy, target.x, target.y, ENEMY_SPEED)
+      // Read off this.stats every frame rather than stored at spawn, so a slug speeds up
+      // the moment the player puts boots on and slows when they pick up Sluggish.
+      const speed = enemy.isSlug ? this.stats.moveSpeed * SLUG_SPEED_SHARE : ENEMY_SPEED
+
+      this.physics.moveTo(enemy, target.x, target.y, speed)
       this.updateEnemyFiring(enemy, time)
     })
   }
@@ -604,7 +623,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   updateEnemyFiring(enemy, time) {
-    if (time < enemy.nextShotAt || !this.hasShotLineTo(enemy)) {
+    if (enemy.isSlug || time < enemy.nextShotAt || !this.hasShotLineTo(enemy)) {
       return
     }
 
@@ -861,6 +880,20 @@ export class PlayScene extends Phaser.Scene {
     enemy.hp = enemyHpFor(this.gameState.enemyStrength + this.roomPlan.enemyStrengthBonus)
     enemy.nextShotAt = this.time.now + ENEMY_FIRE_COOLDOWN
     this.enemies.add(enemy)
+  }
+
+  // Slug Step's enemy: an ordinary chaser that never fires and crawls. Same HP as anything
+  // else, so it is killable rather than a permanent tax - but killing it costs the time it
+  // was built to cost you.
+  spawnSlug() {
+    const spawn = this.pickSpawnPoint()
+    const slug = this.add.rectangle(spawn.x, spawn.y, ENEMY_SIZE, ENEMY_SIZE, SLUG_COLOR)
+
+    this.physics.add.existing(slug)
+    slug.hp = enemyHpFor(this.gameState.enemyStrength + this.roomPlan.enemyStrengthBonus)
+    slug.isSlug = true
+    slug.nextShotAt = Infinity
+    this.enemies.add(slug)
   }
 
   // With a third of the room filled, sample the free grid cells rather than raw
@@ -1145,37 +1178,37 @@ export class PlayScene extends Phaser.Scene {
     return new Phaser.Math.Vector2(x, y)
   }
 
+  // The safe room's payout. Drawn from every source that is not a debuff, and never
+  // cursed - which is the whole promise of the door. Treasure and reward are pooled
+  // together rather than kept apart: treasure lost its only source when kills stopped
+  // dropping items, and from the player's side "curse-free" is the distinction that
+  // matters, not which internal list it came off.
+  //
   // Weighted, not even: a passive already stacked twice comes up at a quarter of the odds
   // of one never seen, so the pool keeps opening up as the run goes on.
-  spawnRewardPickup(x, y) {
-    const item = this.rollFrom(itemsFrom('reward'))
-    const isCursed = Phaser.Math.FloatBetween(0, 1) < this.roomPlan.cursedChance
-
-    this.addPickup(x, y, {
-      kind: 'reward',
-      item,
-      isCursed,
-      color: isCursed ? PICKUP_CURSED_COLOR : PICKUP_REWARD_COLOR
-    })
-  }
-
-  // Rolled from the treasure pool, never cursed.
-  spawnTreasurePickup(x, y) {
+  spawnSafePickup(x, y) {
     this.addPickup(x, y, {
       kind: 'treasure',
-      item: this.rollFrom(itemsFrom('treasure')),
+      item: this.rollFrom([...itemsFrom('treasure'), ...itemsFrom('reward')]),
       isCursed: false,
       color: PICKUP_TREASURE_COLOR
     })
   }
 
+  // The risky room's payout, and the only way into the debuff pool. It goes through
+  // grantItem like any other item rather than through takeReward: there is no curse roll
+  // to make, because the item *is* the curse. Purple, the colour a curse has always been.
+  spawnDebuffPickup(x, y) {
+    this.addPickup(x, y, {
+      kind: 'debuff',
+      item: this.rollFrom(itemsFrom('debuff')),
+      isCursed: false,
+      color: PICKUP_CURSED_COLOR
+    })
+  }
+
   // The only healing outside the shop. It carries no item, so onPickup handles it before
   // anything that reads one.
-  //
-  // spawnRewardPickup and spawnTreasurePickup above are unreferenced as of this change -
-  // a kill no longer rolls either. They are deliberately kept: the room-clear payout is
-  // the next thing to build and will call them unchanged. Delete them if that lands
-  // differently.
   spawnHealPickup(x, y) {
     this.addPickup(x, y, { kind: 'heal', color: PICKUP_HP_REFILL_COLOR })
   }
@@ -1235,11 +1268,9 @@ export class PlayScene extends Phaser.Scene {
   // Only the unique tiers can be sold out from under the player. Passives stack, so a
   // shop is happy to sell a second copy of one you are already wearing.
   shopPool() {
-    const pool = ITEMS.filter(
-      (item) => item.slot === 'passive' || countOwned(this.gameState.inventory, item.id) === 0
-    )
+    const { inventory } = this.gameState
 
-    return weightedPassivePool(this.gameState.inventory, pool)
+    return weightedPassivePool(inventory, sellableItems(ITEMS, inventory))
   }
 
   // One weighted draw from a catalogue slice. Ownership is the only thing that moves the
@@ -1378,7 +1409,28 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    this.payOutRoom()
     this.openDoors()
+  }
+
+  // Clearing a room pays exactly one item, decided by the door that led here rather than
+  // rolled: a safe room hands over something curse-free, a risky one hands over a debuff.
+  // A shop has already sold you what it was going to, and a puzzle room is a stub with
+  // nothing to give yet. Runs once, because openDoors() is what stops checkRoomCleared
+  // coming back round.
+  payOutRoom() {
+    const payouts = {
+      safe_reward: (x, y) => this.spawnSafePickup(x, y),
+      risky_reward: (x, y) => this.spawnDebuffPickup(x, y)
+    }
+    const payout = payouts[this.roomPlan.type]
+
+    if (!payout) {
+      return
+    }
+
+    const spot = this.freeSpotNear(this.player.x, this.player.y)
+    payout(spot.x, spot.y)
   }
 
   // A shop holds its exit shut until the visit is over, so a guarded one cannot be walked
@@ -1629,8 +1681,12 @@ ${advertised.tier}`, {
       this.dropItem(result.displaced)
     }
 
-    const curseNote = isCursed ? ' (CURSED)' : ''
-    this.toast(`${item.name}: ${item.effect}${curseNote}`, isCursed ? '#c084fc' : '#67e8f9')
+    // A debuff is announced in the curse colour and named as what it is. It is the one
+    // pickup the player would rather have walked around, so it should not read like a gift.
+    const cursed = isCursed || kind === 'debuff'
+    const note = kind === 'debuff' ? ' (DEBUFF)' : isCursed ? ' (CURSED)' : ''
+
+    this.toast(`${item.name}: ${item.effect}${note}`, cursed ? '#c084fc' : '#67e8f9')
     console.log('[one-bomb-left] picked up', item.id, 'stats', this.stats)
   }
 

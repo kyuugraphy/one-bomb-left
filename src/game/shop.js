@@ -1,3 +1,4 @@
+import { countOwned } from './inventory.js'
 import { pickWeighted } from './weights.js'
 
 // Flat price per category rather than per item: a shop is meant to be read at a glance,
@@ -20,8 +21,30 @@ export const SHOP_PRICES = {
 export const HP_REFILL = { kind: 'hp_refill', name: 'HP Refill', effect: 'restore all HP' }
 export const BOMB_REFILL = { kind: 'bomb_refill', name: 'Bomb Refill', effect: '+1 bomb' }
 
-const STOCK_MIN = 3
-const STOCK_MAX = 4
+// Exactly three things for sale, every visit. It used to roll 3-4 catalogue items on top
+// of both refills, so a shelf was 5 or 6 wide and reading it was a chore rather than a
+// choice. Three is a shelf you take in at a glance - and since a visit buys exactly one
+// thing, a wider shelf was only ever more options to discard.
+//
+// Both refills are always among the three: they are the shop's staple, and the HP refill
+// is the only full heal left now that a floor heal is half a heart. That leaves one rolled
+// catalogue item per visit.
+export const SHELF_SIZE = 3
+const ALWAYS_STOCKED = 2
+
+// What a shop is allowed to sell. Debuffs are excluded outright: they are what a risky
+// room pays you for surviving it, not merchandise, and a shop that sold you Thin Skin
+// would be a joke played on the player rather than a choice offered to them. The unique
+// tiers drop out once owned, because a shop cannot sell a second trinket or a duplicate
+// active and would only have to refuse at the till. Passives stay in at any count - they
+// stack, so a second copy always has somewhere to go.
+export function sellableItems(items, inventory) {
+  return items.filter(
+    (item) =>
+      item.source !== 'debuff' &&
+      (item.slot === 'passive' || countOwned(inventory, item.id) === 0)
+  )
+}
 
 export function priceOf(entry) {
   return entry.kind === 'item' ? SHOP_PRICES[entry.item.slot] : SHOP_PRICES[entry.kind]
@@ -31,12 +54,15 @@ export function canAfford(gameState, price) {
   return gameState.exp >= price
 }
 
-// 3-4 items drawn without replacement, plus both refills - so a shop is never only ever
-// passive/active items. The caller decides what is in the pool and what each entry is
-// worth: entries are { item, weight }, so a passive the player already stacks turns up on
-// the shelf less often. A short pool simply yields a smaller shop.
+// A fixed-size shelf: both refills, plus enough catalogue items drawn without replacement
+// to fill it. The caller decides what is in the pool and what each entry is worth: entries
+// are { item, weight }, so a passive the player already stacks turns up on the shelf less
+// often. A short pool simply yields a smaller shop.
+//
+// There is no size roll any more - the shelf is always SHELF_SIZE wide - so this spends
+// only the rolls the draws themselves need.
 export function rollShopStock(entries, randomFn) {
-  const wanted = STOCK_MIN + Math.floor(randomFn() * (STOCK_MAX - STOCK_MIN + 1))
+  const wanted = Math.max(0, SHELF_SIZE - ALWAYS_STOCKED)
   const remaining = [...entries]
   const stock = []
 

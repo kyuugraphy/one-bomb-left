@@ -96,7 +96,58 @@ export const ACTIVE_ITEMS = [
   }
 ]
 
-export const ITEMS = [...TRINKET_ITEMS, ...PASSIVE_ITEMS, ...ACTIVE_ITEMS]
+// Curses you carry rather than curses you suffer once. These are **passives**, and that
+// is a deliberate choice rather than a fourth tier:
+//
+// - A curse you can decline is not a curse. The trinket slot replaces and the active rack
+//   refuses when full - and a refusal raises the swap prompt, which the player can walk
+//   away from with ESC. The uncapped passive list refuses nothing and asks nothing, so a
+//   debuff always lands the moment it is picked up.
+// - Two of these should be twice as bad, and the passive tier is the only one that can
+//   say so: computeStats sums and multiplies duplicates.
+// - They already have the shape of a passive - always on, no cooldown, no button.
+//
+// `source: 'debuff'` keeps them out of every other roll: the shop, the safe room-clear
+// payout and the old reward/treasure draws all filter by source, so the only way to be
+// handed one is to clear a risky room.
+export const DEBUFF_ITEMS = [
+  {
+    id: 'rusty_grip',
+    name: 'Rusty Grip',
+    slot: 'passive',
+    source: 'debuff',
+    effect: '-15% fire rate',
+    fireRateMultiplier: 0.85
+  },
+  {
+    id: 'sluggish',
+    name: 'Sluggish',
+    slot: 'passive',
+    source: 'debuff',
+    effect: '-15% move speed',
+    moveSpeedMultiplier: 0.85
+  },
+  {
+    id: 'thin_skin',
+    name: 'Thin Skin',
+    slot: 'passive',
+    source: 'debuff',
+    effect: '-1 max HP (half-heart)',
+    maxHpBonus: -1
+  },
+  {
+    // The only debuff with no stat field: the scene reads how many copies are held and
+    // spawns that many slugs on entering a room. See SLUG_SPEED_SHARE in PlayScene.
+    id: 'slug_step',
+    name: 'Slug Step',
+    slot: 'passive',
+    source: 'debuff',
+    effect: 'every room spawns a slug that chases you',
+    spawnsSlug: true
+  }
+]
+
+export const ITEMS = [...TRINKET_ITEMS, ...PASSIVE_ITEMS, ...ACTIVE_ITEMS, ...DEBUFF_ITEMS]
 
 // panic_button + bulwark equipped together sharpen every bullet. The set moved to the
 // active rack with the tier restructure: passives are uncapped now, so a set built from

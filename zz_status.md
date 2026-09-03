@@ -4,7 +4,16 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, fourth pass)
+## Latest session (2026-09-03, fifth pass)
+Three connected changes plus a shop resize.
+
+1. **A debuff-curse item pool** — Rusty Grip, Sluggish, Thin Skin, Slug Step — living in the **passive tier**, because a curse you can decline is not a curse. See the tier note below.
+2. **Room-clear payouts.** Clearing a SAFE room hands over one curse-free item; clearing a RISKY one hands over one debuff. Shop and puzzle rooms pay nothing.
+3. **Door types are SHOP, SAFE, RISKY and PUZZLE.** COMBAT is gone — safe and risky already covered "how big a fight is this" — and its enemy counts moved onto RISKY. PUZZLE is a stub: an empty room, pink door, telegraph lies about it like any other.
+
+Also: **a shop shelf is exactly three things** (was five or six).
+
+## Previous session (2026-09-03, fourth pass)
 **A kill can no longer drop an item.** Every kill still pays 2 EXP, and one in ten additionally leaves **half a heart** on the floor — that is the whole of the enemy drop table now. The treasure and reward kinds are gone from the roll; items are to come from clearing a room, which is the next thing to build, and from the shop. **The heal is now half a heart rather than a full refill**, which is a real nerf to what was there: one lucky drop used to undo a whole room.
 
 ## Previous session (2026-09-03, third pass)
@@ -43,7 +52,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2333 lines)
+### Game loop (`src/game/PlayScene.js`, 2389 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
@@ -72,7 +81,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
 | `currency.js` | `addExp`, `spendExp` | `exp` |
-| `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `priceOf`, `canAfford`, `rollShopStock` | none - rolls and prices, the scene applies them |
+| `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `rollShopStock` | none - rolls, prices, and what may be sold at all |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP` | none - rolls whether a kill leaves half a heart |
 | `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
@@ -85,8 +94,8 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |
 | `shapes.js` | `ROOM_SHAPES`, `rollRoomShape`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS`, `SHAPE_ROOM_*` | none - data plus the depth-band roll, RNG injected |
 | `shapeRoom.js` | `roomSize`, `cellCentre`, `innerCell`, `solidGrid`, `wallCells`, `wallRun`, `splitDoors`, `doorCells`, `DOOR_INSET` | none - reads a mask, returns grids, cells and world points; `splitDoors` takes an injected RNG |
-| `items.js` | `TRINKET_ITEMS`, `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
-| `effects.js` | `computeStats(base, inventory)` | none - returns a fresh stats object |
+| `items.js` | `TRINKET_ITEMS`, `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `DEBUFF_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
+| `effects.js` | `computeStats(base, inventory)`, `MIN_MAX_HP` | none - returns a fresh stats object |
 | `actives.js` | `triggerActive`, `cooldownRemaining` | `cooldowns` map |
 | `grant.js` | `grantItem` | `inventory` |
 | `swap.js` | `needsSwapPrompt`, `swapOptions`, `applySwap` | `inventory` (via the swap it routes) |
@@ -357,6 +366,58 @@ Verified end to end in the browser, driven through the real keys. Loaded a run t
 - **`ESC` -> `S` -> `ENTER` (Exit run)**: menu opened at Resume, moved to Exit, confirmed - same result, menu closed.
 - **An ordinary door from the same loaded state**: `gameState` carried by reference, EXP, items, curses, bombs and damage all kept, depth advanced by one.
 
+### Debuff curses (`items.js`, source `debuff`)
+Four of them, and they are **passives** rather than a fourth tier. That was the decision to make, and the reasoning is:
+
+- **A curse you can decline is not a curse.** The trinket slot replaces and the active rack refuses when it is full — and a refusal raises the swap prompt, which the player can walk away from with `ESC`. The uncapped passive list refuses nothing and asks nothing, so a debuff lands the instant it is touched. Putting these in a capped tier would have handed the player a way to be immune: fill your slots and curses bounce off.
+- **Two should be twice as bad**, and the passive tier is the only one that can say so — `computeStats` sums and multiplies duplicates, so Rusty Grip x2 is 180 ms of cooldown becoming 249 ms rather than 212 ms.
+- **They already have a passive's shape**: always on, no cooldown, no button, nothing to fire.
+
+`source: 'debuff'` is what keeps them out of everything else. The shop filters on it, the safe payout filters on it, and `itemsFrom('debuff')` is the only way to draw one — so clearing a risky room is the sole route into the pool.
+
+| | effect | how |
+|---|---|---|
+| Rusty Grip | -15% fire rate | `fireRateMultiplier: 0.85` |
+| Sluggish | -15% move speed | `moveSpeedMultiplier: 0.85` |
+| Thin Skin | -1 max HP | `maxHpBonus: -1` |
+| Slug Step | a slug in every room | `spawnsSlug: true`, read by the scene |
+
+**A rate multiplier divides.** `-15% fire rate` is 0.85 shots in the second you used to get one, which is a cooldown 1/0.85 times as long — 180 ms becomes 211.8 ms. Multiplying the cooldown by 0.85 would have shipped a 15% *faster* gun. Flat millisecond bonuses land first, so Hair Trigger then Rusty Grip is `(180 - 35) / 0.85`.
+
+**`MIN_MAX_HP = 1` is a new floor in `computeStats`.** The passive tier is uncapped, so nothing stopped six Thin Skins taking max HP to zero — which is not a harder run but a health bar with no segments and a corpse before the room finished drawing.
+
+**Slug Step** is the one with no stat field. The scene reads how many copies are held and spawns that many slugs on entering a room. A slug is an ordinary chaser with ordinary HP that **never fires** and crawls at **30% of the player's current move speed** — read off `this.stats` every frame, so it speeds up the moment you put boots on and slows when you pick up Sluggish. Measured: 320 -> 95 px/s, 368 -> 109, 266 -> 79. It spawns in combat and puzzle rooms but **not in a shop**, for the same reason a shop's own guards hold off: a shop is safe to walk into.
+
+### Room-clear payouts
+Clearing a room pays exactly one item, decided by the door that led there rather than rolled:
+
+| door | on clear |
+|---|---|
+| SAFE | one item from every non-debuff source, never cursed |
+| RISKY | one item from the debuff pool |
+| SHOP | nothing — it already sold you something |
+| PUZZLE | nothing — it is a stub |
+
+The safe payout pools **treasure and reward together**. Treasure lost its only source when kills stopped dropping items, and from the player's side the distinction that matters is "curse-free", not which internal list it came off. It is still weighted, so a passive already stacked twice comes up at a quarter of the odds of one never seen.
+
+`payOutRoom()` runs from `checkRoomCleared` just before `openDoors`, which is what stops it coming round twice. The pickup lands at `freeSpotNear(player)` rather than at a fixed point, so in a 2240 px big room it is not left across the map.
+
+### Door types: SHOP, SAFE, RISKY, PUZZLE
+**COMBAT is removed.** Safe and risky already answered "how big a fight is this", so a third combat door was a difficulty dial wearing a reward door's clothes. Its enemy counts (4/6/9) moved onto **RISKY**, which is now the heavy fight as well as the one that pays in debuffs.
+
+**PUZZLE is a stub** and deliberately looks like one: `roomType: 'puzzle'`, zero enemies at every tier, no rolled clutter, no payout for clearing it. Its doors open the moment you walk in. The telegraph treats it like any other type — it lies about type and tier at the same 90%/90%, so a door claiming PUZZLE can still be a fight.
+
+**Pink, `0xf472b6`.** The four have to be told apart at a glance, and pink is the furthest unused hue from the violet RISKY door — the pair that would otherwise be easiest to confuse (55 degrees apart, against 27 for the green-vs-cyan alternative). Red is free again with COMBAT gone, but red is what damage and enemies are painted in everywhere else, so it stays out of the door vocabulary.
+
+Sampled 5,000 rolls: all four types come up about evenly (3,072-3,182 each), the 2-3 door split is unchanged, and `combat_heavy` never appears.
+
+### Shop shelf: exactly three
+`SHELF_SIZE = 3`, refills included. It used to roll 3-4 catalogue items **on top of** both refills, so a shelf was five or six wide — and since a visit buys exactly one thing, the extra width was only ever more options to discard. There is no size roll any more, so `rollShopStock` spends only the rolls the draws need.
+
+Both refills are always among the three: they are the shop's staple, and the HP Refill is the only full heal left now that a floor heal is half a heart. **That leaves one rolled catalogue item per visit** — see Not done.
+
+`sellableItems(items, inventory)` moved out of `PlayScene` into `shop.js` so the guarantee is testable: **a debuff is never for sale at any price**, the unique tiers drop out once owned, and passives stay in at any count.
+
 ### Shot range (`bullets.js`)
 A shot dies at **336 px** - six cells of the 56 px grid - unless a wall, a rock or something it hits takes it first. Baseline, not an item or a curse: every shot, always, **on both sides**. It replaces nothing; the existing despawns all still run, whichever comes first.
 
@@ -397,7 +458,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 20 files, 296 tests, green.
+- `npx vitest run` → 20 files, 319 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
@@ -408,6 +469,10 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
+- **A risky room's payout is purely bad, and nothing makes you take it.** Clearing a RISKY room drops a debuff, and with no take/skip UI the only way to refuse a pickup is to walk around it - which a player will learn to do in one room. So the "risk" of a risky door is currently a fight you can win and then ignore the consequences of. It needs either a reason to want the debuff (paired with something good), or a payout that lands on you rather than on the floor. **Flagged rather than solved: it is a design call.**
+- **The curse machinery is dormant.** Nothing spawns a `kind: 'reward'` pickup any more, so `takeReward`, `collectReward`, `rewards.js`, `curses.js` and every `cursedChance` in `ROOM_PLANS` are unreachable from the scene. `riskLevel` and `enemyStrength` are still carried and `enemyHpFor` still reads `enemyStrength`, but nothing raises either. The debuff pool has taken over as the risk channel. Decide whether the old one comes back or comes out.
+- **A shop sells one catalogue item per visit.** With the shelf at three and both refills always on it, that is what is left. Kills drop no items either, so a run's item income is one safe room-clear plus one shop item — the rack fills very slowly. Raise `SHELF_SIZE` to 4 if that plays too thin.
+- **A puzzle room is not empty if you carry Slug Step.** The room generates nothing, but the slug is something the player brought with them, so it follows them in. Correct as far as it goes, but worth revisiting once a puzzle room has actual contents.
 - **Enemies fire from outside their own range.** `hasShotLineTo` asks whether a rock is in the way and never how far the player is, so an enemy with a clear line shoots from anywhere - and now that shots stop at 336 px, one fired from 900 px away dies 539 px short. Measured. It reads as "out of range" rather than as a bug, and it is symmetric with the player's auto-fire, which wastes shots the same way. But the enemy is spending a 1.4 s fire cooldown on nothing, so a distant enemy is harmless in a way it was not before, and in a big room that is most of them. The fix is a distance check in `updateEnemyFiring` - deliberately not done here, because it changes how dangerous a room is and that is a balance call, not a bug fix.
 - **A big room can leave an enemy 40 s away.** G's longest route is 83 cells. Nothing is wrong with the pathing - it walks the whole way - and the off-screen arrows now at least say *where* the straggler is, but "clear the room" can still mean waiting on one enemy crossing a room and a half. A minimap, or a leash that pulls the last enemy in, is the next thing to try.
 - **A big room's entry is a spawn point, not a doorway.** The mask's entry cell is part of the wall ring and stays solid; the player is placed two cells inside it. There is no opening drawn, so nothing marks where you came in - the same complaint the rectangular room's bottom doorway already has.

@@ -23,7 +23,7 @@ function runInProgress() {
 }
 
 const doorPayload = (gameState, health) => ({
-  plan: roomPlanFor({ type: 'combat_heavy', tier: 'hard' }),
+  plan: roomPlanFor({ type: 'risky_reward', tier: 'hard' }),
   shape: 'G',
   carried: { gameState, health }
 })

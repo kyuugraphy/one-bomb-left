@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { ITEMS } from './items.js'
+import { createInventory } from './inventory.js'
+import { ITEMS, getItem, itemsFrom } from './items.js'
 import {
   BOMB_REFILL,
   HP_REFILL,
+  SHELF_SIZE,
   SHOP_PRICES,
   canAfford,
   priceOf,
-  rollShopStock
+  rollShopStock,
+  sellableItems
 } from './shop.js'
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
@@ -32,20 +35,33 @@ describe('rollShopStock', () => {
     expect(stock).toContainEqual(BOMB_REFILL)
   })
 
-  it('rolls 3 catalogue items on a low roll', () => {
-    const stock = rollShopStock(POOL, rng(0, 0, 0, 0))
-
-    expect(stock.filter((entry) => entry.kind === 'item')).toHaveLength(3)
+  // A shelf is exactly SHELF_SIZE wide now, refills included, whatever the rolls say.
+  // It used to be a 3-4 roll on top of the refills, so a visit faced 5 or 6 things.
+  it('puts exactly SHELF_SIZE things on the shelf, however the rolls fall', () => {
+    ;[rng(0, 0, 0, 0), rng(0.99, 0.99, 0.99, 0.99), rng(0.5, 0.1, 0.9, 0.3)].forEach(
+      (randomFn) => expect(rollShopStock(POOL, randomFn)).toHaveLength(SHELF_SIZE)
+    )
   })
 
-  it('rolls 4 catalogue items on a high roll', () => {
-    const stock = rollShopStock(POOL, rng(0.99, 0, 0, 0, 0))
+  it('fills the shelf with the two refills and one rolled item', () => {
+    const stock = rollShopStock(POOL, rng(0, 0, 0, 0))
 
-    expect(stock.filter((entry) => entry.kind === 'item')).toHaveLength(4)
+    expect(stock.filter((entry) => entry.kind === 'item')).toHaveLength(SHELF_SIZE - 2)
+    expect(stock.filter((entry) => entry.kind !== 'item')).toHaveLength(2)
+  })
+
+  // No size roll any more, so the first random value is a draw rather than a count -
+  // a high first roll must not quietly widen the shelf again.
+  it('does not spend a roll on the size', () => {
+    const low = rollShopStock(POOL, rng(0, 0, 0, 0))
+    const high = rollShopStock(POOL, rng(0.99, 0, 0, 0))
+
+    expect(low).toHaveLength(high.length)
   })
 
   it('never stocks the same item twice', () => {
     const stock = rollShopStock(POOL, rng(0.99, 0, 0, 0, 0))
+    // one item per shelf today, so this is a guard on the draw rather than on this shelf
     const ids = stock.filter((entry) => entry.kind === 'item').map((entry) => entry.item.id)
 
     expect(new Set(ids).size).toBe(ids.length)
@@ -59,7 +75,7 @@ describe('rollShopStock', () => {
       .forEach((entry) => expect(POOL.map((slot) => slot.item)).toContain(entry.item))
   })
 
-  it('stocks what it can when the pool is smaller than the roll', () => {
+  it('stocks what it can when the pool is smaller than the shelf', () => {
     const stock = rollShopStock([POOL[0]], rng(0.99, 0))
 
     expect(stock.filter((entry) => entry.kind === 'item')).toHaveLength(1)
@@ -84,6 +100,48 @@ describe('rollShopStock', () => {
 
   it('stocks the refills alone when the pool is empty', () => {
     expect(rollShopStock([], rng(0))).toEqual([HP_REFILL, BOMB_REFILL])
+  })
+
+})
+
+// What the shop is allowed to sell at all. rollShopStock draws from whatever pool it is
+// handed, so this is where the guarantee that a debuff is never for sale actually lives.
+describe('sellableItems', () => {
+  const empty = createInventory()
+
+  it('never offers a debuff, at any price, to any inventory', () => {
+    const ids = sellableItems(ITEMS, empty).map((item) => item.id)
+
+    itemsFrom('debuff').forEach((item) => expect(ids).not.toContain(item.id))
+  })
+
+  it('leaves the debuff pool out even when it is the whole catalogue', () => {
+    expect(sellableItems(itemsFrom('debuff'), empty)).toEqual([])
+  })
+
+  it('offers everything that is not a debuff to a player holding nothing', () => {
+    const safe = ITEMS.filter((item) => item.source !== 'debuff')
+
+    expect(sellableItems(ITEMS, empty)).toEqual(safe)
+  })
+
+  it('stops offering a trinket or an active once it is owned', () => {
+    const held = createInventory()
+    held.trinket = getItem('heavy_vest')
+    held.actives[0] = getItem('panic_button')
+
+    const ids = sellableItems(ITEMS, held).map((item) => item.id)
+
+    expect(ids).not.toContain('heavy_vest')
+    expect(ids).not.toContain('panic_button')
+    expect(ids).toContain('bulwark')
+  })
+
+  it('keeps offering a passive however many copies are already held', () => {
+    const held = createInventory()
+    held.passives.push(getItem('iron_plating'), getItem('iron_plating'))
+
+    expect(sellableItems(ITEMS, held).map((item) => item.id)).toContain('iron_plating')
   })
 })
 

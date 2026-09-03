@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
   ACTIVE_ITEMS,
+  DEBUFF_ITEMS,
   ITEMS,
   PASSIVE_ITEMS,
   SET_BONUS,
@@ -21,8 +22,10 @@ describe('item data', () => {
     expect(TRINKET_ITEMS.length).toBeGreaterThanOrEqual(1)
   })
 
-  test('the three tiers make up the whole catalogue and do not overlap', () => {
-    expect(TRINKET_ITEMS.length + PASSIVE_ITEMS.length + ACTIVE_ITEMS.length).toBe(ITEMS.length)
+  test('the tiers and the debuffs make up the whole catalogue and do not overlap', () => {
+    expect(
+      TRINKET_ITEMS.length + PASSIVE_ITEMS.length + ACTIVE_ITEMS.length + DEBUFF_ITEMS.length
+    ).toBe(ITEMS.length)
   })
 
   test('the original five items are still in the catalogue', () => {
@@ -41,7 +44,7 @@ describe('item data', () => {
     expect(new Set(ids).size).toBe(ids.length)
     ITEMS.forEach((item) => {
       expect(item.name).toBeTruthy()
-      expect(['reward', 'treasure']).toContain(item.source)
+      expect(['reward', 'treasure', 'debuff']).toContain(item.source)
     })
   })
 
@@ -79,12 +82,65 @@ describe('item data', () => {
     expect(itemsFrom('treasure').map((item) => item.id)).toContain('steady_boots')
   })
 
-  test('the reward pool is everything that is not treasure', () => {
+  test('the three sources partition the catalogue with no overlap', () => {
     const reward = itemsFrom('reward').map((item) => item.id)
     const treasure = itemsFrom('treasure').map((item) => item.id)
+    const debuff = itemsFrom('debuff').map((item) => item.id)
 
-    expect(reward.length + treasure.length).toBe(ITEMS.length)
+    expect(reward.length + treasure.length + debuff.length).toBe(ITEMS.length)
     expect(reward.some((id) => treasure.includes(id))).toBe(false)
+    expect(debuff.some((id) => reward.includes(id) || treasure.includes(id))).toBe(false)
     expect(reward).toContain('panic_button')
+  })
+})
+
+// Debuffs are the risky room's payout, so what matters about them as data is that they
+// are passives - the one tier that cannot refuse an item or be walked away from - and
+// that no other roll can reach them.
+describe('debuff items', () => {
+  test('there are four of them, matching the design', () => {
+    expect(DEBUFF_ITEMS.map((item) => item.id).sort()).toEqual([
+      'rusty_grip',
+      'slug_step',
+      'sluggish',
+      'thin_skin'
+    ])
+  })
+
+  test('every one is a passive, so it can never be declined for want of a slot', () => {
+    DEBUFF_ITEMS.forEach((item) => expect(item.slot).toBe('passive'))
+  })
+
+  test('every one is sourced debuff, so no other pool can draw it', () => {
+    DEBUFF_ITEMS.forEach((item) => expect(item.source).toBe('debuff'))
+    expect(itemsFrom('debuff')).toEqual(DEBUFF_ITEMS)
+  })
+
+  test('none of them is in the reward, treasure or shop-facing pools', () => {
+    const safe = [...itemsFrom('reward'), ...itemsFrom('treasure')].map((item) => item.id)
+
+    DEBUFF_ITEMS.forEach((item) => expect(safe).not.toContain(item.id))
+  })
+
+  // Each one has to actually do something, and the fields are what computeStats reads.
+  test('each one carries the field that makes it hurt', () => {
+    expect(getItem('rusty_grip').fireRateMultiplier).toBeLessThan(1)
+    expect(getItem('sluggish').moveSpeedMultiplier).toBeLessThan(1)
+    expect(getItem('thin_skin').maxHpBonus).toBeLessThan(0)
+    expect(getItem('slug_step').spawnsSlug).toBe(true)
+  })
+
+  test('none of them is secretly a buff', () => {
+    DEBUFF_ITEMS.forEach((item) => {
+      expect(item.maxHpBonus ?? 0).toBeLessThanOrEqual(0)
+      expect(item.damageBonus ?? 0).toBeLessThanOrEqual(0)
+      expect(item.moveSpeedMultiplier ?? 1).toBeLessThanOrEqual(1)
+      expect(item.fireRateMultiplier ?? 1).toBeLessThanOrEqual(1)
+      expect(item.fireCooldownBonus ?? 0).toBeGreaterThanOrEqual(0)
+    })
+  })
+
+  test('none of them carries a cooldown, so nothing treats one as an active', () => {
+    DEBUFF_ITEMS.forEach((item) => expect(item.cooldown).toBeUndefined())
   })
 })

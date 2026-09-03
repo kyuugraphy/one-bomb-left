@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { computeStats } from './effects.js'
+import { MIN_MAX_HP, computeStats } from './effects.js'
 import { createInventory } from './inventory.js'
 import { getItem } from './items.js'
 
@@ -84,5 +84,77 @@ describe('computeStats', () => {
     inventory.actives[1] = getItem('bulwark')
 
     expect(computeStats(BASE, inventory).damage).toBeCloseTo(1.5 * 1.05)
+  })
+})
+
+// The debuff tier goes through exactly the same machinery as any other passive - that is
+// the point of putting it there - so what needs testing is the two things it added:
+// a rate multiplier that divides, and a floor under max HP.
+describe('computeStats with debuffs', () => {
+  test('Rusty Grip lengthens the cooldown rather than shortening it', () => {
+    const { fireCooldown } = computeStats(BASE, withPassives('rusty_grip'))
+
+    expect(fireCooldown).toBeGreaterThan(BASE.fireCooldown)
+  })
+
+  // -15% fire rate means 0.85 shots in the time you used to get one, so the cooldown is
+  // 1/0.85 as long - not 0.85 as long, which would have been a faster gun.
+  test('Rusty Grip costs exactly 15% of the fire rate', () => {
+    const { fireCooldown } = computeStats(BASE, withPassives('rusty_grip'))
+    const rateBefore = 1000 / BASE.fireCooldown
+    const rateAfter = 1000 / fireCooldown
+
+    expect(rateAfter / rateBefore).toBeCloseTo(0.85)
+    expect(fireCooldown).toBeCloseTo(BASE.fireCooldown / 0.85)
+  })
+
+  test('Rusty Grip stacks multiplicatively', () => {
+    const one = computeStats(BASE, withPassives('rusty_grip')).fireCooldown
+    const two = computeStats(BASE, withPassives('rusty_grip', 'rusty_grip')).fireCooldown
+
+    expect(two).toBeCloseTo(BASE.fireCooldown / (0.85 * 0.85))
+    expect(two).toBeGreaterThan(one)
+  })
+
+  // Flat millisecond bonuses apply before the rate multiplier, so a Hair Trigger makes the
+  // gun faster and the Rusty Grip then takes its 15% off whatever is left.
+  test('a flat cooldown bonus lands before the rate multiplier', () => {
+    const { fireCooldown } = computeStats(BASE, withPassives('hair_trigger', 'rusty_grip'))
+
+    expect(fireCooldown).toBeCloseTo((BASE.fireCooldown - 35) / 0.85)
+  })
+
+  test('Sluggish takes 15% of move speed, and stacks with a boost', () => {
+    expect(computeStats(BASE, withPassives('sluggish')).moveSpeed).toBeCloseTo(320 * 0.85)
+    expect(computeStats(BASE, withPassives('sluggish', 'steady_boots')).moveSpeed)
+      .toBeCloseTo(320 * 0.85 * 1.15)
+  })
+
+  test('Thin Skin costs half a heart, and cancels against Iron Plating', () => {
+    expect(computeStats(BASE, withPassives('thin_skin')).maxHp).toBe(5)
+    expect(computeStats(BASE, withPassives('thin_skin', 'iron_plating')).maxHp).toBe(6)
+  })
+
+  // The uncapped tier means nothing stops a run collecting six of these. Zero max HP is
+  // not a harder run, it is a health bar with no segments and a corpse.
+  test('max HP never falls to zero however many Thin Skins are held', () => {
+    for (let copies = 1; copies <= 12; copies++) {
+      const stats = computeStats(BASE, withPassives(...Array(copies).fill('thin_skin')))
+
+      expect(stats.maxHp).toBeGreaterThanOrEqual(MIN_MAX_HP)
+    }
+
+    expect(computeStats(BASE, withPassives(...Array(12).fill('thin_skin'))).maxHp).toBe(MIN_MAX_HP)
+  })
+
+  test('Slug Step changes no stat at all - the scene reads it, not computeStats', () => {
+    expect(computeStats(BASE, withPassives('slug_step'))).toEqual(computeStats(BASE, createInventory()))
+  })
+
+  test('a debuff and a buff of the same kind cancel out', () => {
+    const both = computeStats(BASE, withPassives('sluggish', 'steady_boots', 'thin_skin', 'iron_plating'))
+
+    expect(both.maxHp).toBe(BASE.maxHp)
+    expect(both.moveSpeed).toBeCloseTo(320 * 0.85 * 1.15)
   })
 })

@@ -142,7 +142,7 @@ describe('roomPlanFor', () => {
       TIERS.forEach((tier) => {
         const built = plan(type, tier)
 
-        expect(built.roomType).toMatch(/^(combat|shop)$/)
+        expect(built.roomType).toMatch(/^(combat|shop|puzzle)$/)
         expect(built.enemyCount).toBeGreaterThanOrEqual(0)
         expect(built.enemyStrengthBonus).toBeGreaterThanOrEqual(0)
         expect(built.cursedChance).toBeGreaterThanOrEqual(0)
@@ -151,32 +151,35 @@ describe('roomPlanFor', () => {
     )
   })
 
-  it('sends shop doors to a shop room and everything else to a combat room', () => {
+  it('sends each door type to its own kind of room', () => {
     expect(plan('shop', 'medium').roomType).toBe('shop')
     expect(plan('safe_reward', 'medium').roomType).toBe('combat')
     expect(plan('risky_reward', 'medium').roomType).toBe('combat')
-    expect(plan('combat_heavy', 'medium').roomType).toBe('combat')
+    expect(plan('puzzle', 'medium').roomType).toBe('puzzle')
   })
 
-  it('puts more enemies behind a combat-heavy door than a safe-reward one', () => {
+  // Risky is the heavy combat door now that combat_heavy is gone: it is where the enemy
+  // counts that used to sit behind a red door live, and it is what you are paid a debuff
+  // for surviving.
+  it('puts more enemies behind a risky door than a safe one', () => {
     TIERS.forEach((tier) => {
-      expect(plan('combat_heavy', tier).enemyCount).toBeGreaterThan(
+      expect(plan('risky_reward', tier).enemyCount).toBeGreaterThan(
         plan('safe_reward', tier).enemyCount
       )
     })
   })
 
-  it('raises the enemy count with the tier, for every type', () => {
-    REWARD_TYPES.forEach((type) => {
+  it('raises the enemy count with the tier for every door that has enemies', () => {
+    REWARD_TYPES.filter((type) => type !== 'puzzle').forEach((type) => {
       expect(plan(type, 'medium').enemyCount).toBeGreaterThan(plan(type, 'easy').enemyCount)
       expect(plan(type, 'hard').enemyCount).toBeGreaterThan(plan(type, 'medium').enemyCount)
     })
   })
 
   it('toughens the enemies with the tier as well as multiplying them', () => {
-    expect(plan('combat_heavy', 'easy').enemyStrengthBonus).toBe(0)
-    expect(plan('combat_heavy', 'hard').enemyStrengthBonus).toBeGreaterThan(
-      plan('combat_heavy', 'medium').enemyStrengthBonus
+    expect(plan('risky_reward', 'easy').enemyStrengthBonus).toBe(0)
+    expect(plan('risky_reward', 'hard').enemyStrengthBonus).toBeGreaterThan(
+      plan('risky_reward', 'medium').enemyStrengthBonus
     )
   })
 
@@ -188,8 +191,19 @@ describe('roomPlanFor', () => {
     TIERS.forEach((tier) => expect(plan('safe_reward', tier).cursedChance).toBe(0))
   })
 
-  it('leaves the ordinary coin-flip curse behind a combat door', () => {
-    expect(plan('combat_heavy', 'medium').cursedChance).toBe(0.5)
+  // The puzzle room is a stub: no enemies at any tier, nothing cursed, nothing to clear.
+  // The tier still rides on the door, because the telegraph lies about it like any other.
+  it('leaves a puzzle room empty at every tier', () => {
+    TIERS.forEach((tier) => {
+      expect(plan('puzzle', tier).enemyCount).toBe(0)
+      expect(plan('puzzle', tier).cursedChance).toBe(0)
+    })
+  })
+
+  it('has no combat_heavy door left to plan for', () => {
+    expect(REWARD_TYPES).not.toContain('combat_heavy')
+    expect(REWARD_TYPES).toContain('puzzle')
+    expect(REWARD_TYPES).toHaveLength(4)
   })
 
   it('leaves an easy shop unguarded and a hard one guarded', () => {

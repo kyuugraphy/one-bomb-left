@@ -11,7 +11,7 @@ export function rollDoorCount(randomFn) {
 
 // What a door advertises. The colour the scene paints is keyed off this, so the four
 // are the whole vocabulary of the telegraph.
-export const REWARD_TYPES = ['shop', 'risky_reward', 'safe_reward', 'combat_heavy']
+export const REWARD_TYPES = ['shop', 'risky_reward', 'safe_reward', 'puzzle']
 
 export const TIERS = ['easy', 'medium', 'hard']
 
@@ -66,18 +66,22 @@ export function resolveDoor(door, randomFn) {
 //
 // - shop:         the shop room. The tier is the guard, not the stock: an easy shop is
 //                 quiet, a hard one is defended.
-// - safe_reward:  few enemies and nothing that can be cursed - the door you take to
-//                 bank what you are carrying rather than to be handed anything.
-// - risky_reward: more enemies, and nearly every drop they leave is cursed, so the
-//                 payout comes with riskLevel/enemyStrength attached.
-// - combat_heavy: an ordinary coin-flip curse, but a room packed with enemies - and a
-//                 kill is 2 EXP and a one-in-ten shot at a drop, so this is the door you
-//                 take to farm.
+// - safe_reward:  few enemies, and clearing it hands over one item that cannot be cursed
+//                 - the door you take to be paid.
+// - risky_reward: more enemies, and clearing it hands over one debuff. The room is the
+//                 gamble now rather than the item being poisoned: you know exactly what
+//                 kind of thing is waiting, you just do not know which one.
+// - puzzle:       a stub. An empty room with no enemies and no clutter, and no payout for
+//                 clearing it, until there is an actual puzzle to put in it. The door
+//                 telegraph treats it like any other type, lies included.
+//
+// combat_heavy is gone: safe and risky already cover "how much of a fight is this", and a
+// third combat door was a difficulty dial wearing a reward door's clothes.
 const ROOM_PLANS = {
   shop: { roomType: 'shop', enemies: { easy: 0, medium: 2, hard: 3 }, cursedChance: 0 },
   safe_reward: { roomType: 'combat', enemies: { easy: 1, medium: 2, hard: 3 }, cursedChance: 0 },
-  risky_reward: { roomType: 'combat', enemies: { easy: 2, medium: 4, hard: 6 }, cursedChance: 0.9 },
-  combat_heavy: { roomType: 'combat', enemies: { easy: 4, medium: 6, hard: 9 }, cursedChance: 0.5 }
+  risky_reward: { roomType: 'combat', enemies: { easy: 4, medium: 6, hard: 9 }, cursedChance: 0.9 },
+  puzzle: { roomType: 'puzzle', enemies: { easy: 0, medium: 0, hard: 0 }, cursedChance: 0 }
 }
 
 // Tier does two things at once: more enemies (per the table) and tougher ones. The
@@ -104,11 +108,15 @@ export function roomPlanFor({ type, tier }) {
 // Colour is the reward type and glow is the tier, so a door is read in one look: what
 // it is, then how bad it is. The two channels are deliberately separate - a cyan door
 // blazing at full intensity is a safe room that will still hurt.
+// Pink for the puzzle door: the four have to be told apart at a glance, and pink is the
+// furthest unused hue from the violet risky door - the pair that would otherwise be
+// easiest to confuse. Red is free again with combat_heavy gone, but red is what damage
+// and enemies are painted in everywhere else, so it stays out of the door vocabulary.
 export const DOOR_STYLE = {
   shop: { color: 0xfbbf24, label: 'SHOP' },
   risky_reward: { color: 0xc084fc, label: 'RISKY' },
   safe_reward: { color: 0x67e8f9, label: 'SAFE' },
-  combat_heavy: { color: 0xef4444, label: 'COMBAT' }
+  puzzle: { color: 0xf472b6, label: 'PUZZLE' }
 }
 
 // Fill alpha, border thickness and how fast the pad pulses. A hard door is brighter,
