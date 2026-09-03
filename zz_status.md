@@ -4,7 +4,12 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, twelfth pass) — the shop shows what it is selling
+## Latest session (2026-09-03, thirteenth pass) — corridor rooms, part one
+`generateCorridorRoom(randomFn)` is in: a corridor's orientation and dimensions, test-first, pure. It hands back the same shape object the L/Z/T/G masks are, so everything in `shapeRoom.js` reads it unchanged — but it is **rolled rather than hand-authored**, because a corridor has no silhouette worth drawing and its mask would otherwise be sixty lines of hashes.
+
+**Obstacles and doors are deliberately not done.** The shape carries no `entry` or `exits` yet, so it cannot be handed to the scene.
+
+## Previous session (2026-09-03, twelfth pass) — the shop shows what it is selling
 Shelf stock wears the item's own icon now, in place of the `PASSIVE  ?` labels. The price stays; the name and the exact effect still wait for the purchase to land. **This reverses the "shop sells blind" call from two passes ago**: spending a real resource deserves an informed choice, while the exact numbers are a surprise worth keeping.
 
 ## Previous session (2026-09-03, eleventh pass) — the shop rolls all three slots
@@ -126,6 +131,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |
 | `shapes.js` | `ROOM_SHAPES`, `rollRoomShape`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS`, `SHAPE_ROOM_*` | none - data plus the depth-band roll, RNG injected |
+| `corridor.js` | `generateCorridorRoom`, `CORRIDOR_WALKABLE_WIDTH`, `CORRIDOR_MIN_LENGTH`, `CORRIDOR_MAX_LENGTH`, `CORRIDOR_WALL_RING` | none - rolls a corridor's orientation and size, RNG injected |
 | `shapeRoom.js` | `roomSize`, `cellCentre`, `innerCell`, `solidGrid`, `wallCells`, `wallRun`, `splitDoors`, `doorCells`, `DOOR_INSET` | none - reads a mask, returns grids, cells and world points; `splitDoors` takes an injected RNG |
 | `items.js` | `TRINKET_ITEMS`, `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `DEBUFF_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
 | `effects.js` | `computeStats(base, inventory)`, `MIN_MAX_HP` | none - returns a fresh stats object, `expPerKill` among them |
@@ -443,6 +449,24 @@ Two things it used to do that still happen, by other means: a pickup can still b
 
 Swept in the browser over 48 room clears across all four room types: **no `reward` pickup and nothing flagged cursed, ever** - only `treasure`, `debuff`, `heal` and `shop`.
 
+### Corridor rooms (`corridor.js`) — shape and size only
+Long, narrow, straight through. Two rolls, **in a fixed order that is part of the contract** — the orientation, then the length — so a test that wants a particular corridor can queue its rolls against it. Obstacles will come third when they land.
+
+**Every number in the spec is a walkable one: the space between the walls, not the mask.** That distinction was worth settling before writing any code. `solidGrid` turns every floor cell that touches the outside into wall, so a mask only 2 cells across would have been **solid wall end to end, with nothing to stand on**. Measured before writing the test: a 2-wide mask yields 0 walkable cells, a 4-wide yields 4. So the mask is always the walk plus `CORRIDOR_WALL_RING` on both axes.
+
+| | walkable | mask | pixels |
+|---|---|---|---|
+| across | 3 cells | 5 | 168 px |
+| along | 12-60 cells | 14-62 | 672-3360 px |
+
+Three across rather than two because a 36 px enemy in a straight run with nowhere to step aside is a wall you shoot through rather than something you dodge. The length range is half a base room to two and a half of them, measured against the base room's 24-cell side.
+
+**16 tests, all measuring off the finished grid rather than off the mask**, so they pin the thing that matters in play and leave the mask free to be whatever holds it: the mask rectangular, non-empty and all floor; orientation one of two, taken off the roll, and about even over 4,000 runs; the layout matching the orientation; the walkable width; the mask carrying a wall ring on both axes; the length range and both its ends; whole-cell snapping; the spread of lengths in between; and a corridor always longer than it is wide.
+
+Verified on the real output: 672 px at the shortest and 3360 px at the longest, 168 px across in both orientations, **50.6% horizontal over 20,000 rolls**, and all 49 walkable lengths reachable.
+
+**Still to do:** obstacles at 10-15% coverage, and a door at each far end. One thing to decide first — `generateObstacles` seeds shapes with `pickSeed`, which biases two thirds of them into a 3-cell band hugging the wall. In a corridor only 3 cells wide **every** cell is in that band, so the near-wall bias stops meaning anything and a single rock can span a third of the width. Corridors may need their own placement rule rather than just the lower density.
+
 ### Placeholder item icons
 A coloured geometric shape per item, in the same register as the player, the enemies and everything else on screen. **Shape is the tier, colour is the item**, so one glyph says both what kind of thing this is and which one:
 
@@ -617,7 +641,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 18 files, 350 tests, green.
+- `npx vitest run` → 19 files, 366 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
