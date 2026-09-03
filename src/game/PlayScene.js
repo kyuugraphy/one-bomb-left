@@ -1,5 +1,6 @@
 import Phaser from 'phaser'
 import { cooldownRemaining, triggerActive } from './actives.js'
+import { BULLET_LIFETIME, BULLET_RANGE, BULLET_SPEED } from './bullets.js'
 import { addExp, spendExp } from './currency.js'
 import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
@@ -27,9 +28,7 @@ import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 
 const PLAYER_SPEED = 320
 const PLAYER_SIZE = 32
-const BULLET_SPEED = 700
 const BULLET_RADIUS = 5
-const BULLET_LIFETIME = 1200
 const FIRE_COOLDOWN = 180
 const MUZZLE_OFFSET = PLAYER_SIZE / 2 + BULLET_RADIUS
 const ENEMY_SIZE = 36
@@ -482,6 +481,7 @@ export class PlayScene extends Phaser.Scene {
     this.updateMovement()
     this.updateEnemies(time)
     this.updateEnemyPings()
+    this.updateBullets()
     this.updateFiring(time)
     this.updateActives(time)
     this.updatePickupRearm()
@@ -904,7 +904,36 @@ export class PlayScene extends Phaser.Scene {
     bullet.body.setVelocity(aim.x * BULLET_SPEED, aim.y * BULLET_SPEED)
     this.bullets.add(bullet)
 
+    // Measured from where it was last frame rather than from the muzzle, so a bullet
+    // accrues only while it is actually moving: physics stops during the swap prompt and
+    // the pause menu, and a shot held there should come out of it with its range intact.
+    bullet.travelled = 0
+    bullet.lastX = bullet.x
+    bullet.lastY = bullet.y
+
     this.time.delayedCall(BULLET_LIFETIME, () => bullet.destroy())
+  }
+
+  // Range is a baseline rule, not an item: every shot dies at BULLET_RANGE unless a wall,
+  // a rock or an enemy takes it first. The timeout in fire() outlives this by a factor of
+  // two and a half at the current speed and never gets to fire - see bullets.js, which
+  // holds that arithmetic and a test that says which limit is really in charge.
+  updateBullets() {
+    // slice: destroying inside the loop mutates the group's own child array
+    this.bullets.getChildren().slice().forEach((bullet) => {
+      bullet.travelled += Phaser.Math.Distance.Between(
+        bullet.lastX,
+        bullet.lastY,
+        bullet.x,
+        bullet.y
+      )
+      bullet.lastX = bullet.x
+      bullet.lastY = bullet.y
+
+      if (bullet.travelled >= BULLET_RANGE) {
+        bullet.destroy()
+      }
+    })
   }
 
   onBulletHitEnemy(bullet, enemy) {

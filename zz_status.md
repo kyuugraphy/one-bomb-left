@@ -4,7 +4,10 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, second pass)
+## Latest session (2026-09-03, third pass)
+**Player shots now have a range: 336 px, six cells.** Distance is accumulated per bullet from where it was last frame, so a shot dies at the cap whatever else is going on - and only accrues while it is actually moving, which matters because physics stops during the swap prompt and the pause menu. The wall, rock and enemy hits are unchanged, and the old 1200 ms lifetime stays as a backstop it now never gets to use: at 700 px/s the cap is reached in **480 ms**, two and a half times inside it. `bullets.js` is new and holds that arithmetic with the tests that keep it honest.
+
+## Previous session (2026-09-03, second pass)
 **Big rooms are reachable by playing now, and the restart bug is fixed.** `rollRoomShape()` makes rooms 3 to 7 a coin flip between a rectangle and one of the four shapes, drawn evenly; rooms 1-2 and 8 onward stay rectangles, and a shop is always a rectangle whatever the depth. The run carries a `roomNumber`, shown in the HUD beside the wallet.
 
 `scene.restart()` with no argument was handing `init()` the previous room's payload back, so death and the pause menu's **Exit** resumed the run they claimed to end. Both now call `startFreshRun()`, which passes `{}`. `run.js` is new and holds `freshGameState()` and `roomFor()`, the seam that made "fresh run" versus "next room" testable at all.
@@ -37,9 +40,9 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2287 lines)
+### Game loop (`src/game/PlayScene.js`, 2316 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
-- Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, 1200 ms lifetime.
+- Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
 - Room walls: 5 static rectangles (**56 px = one full grid cell**, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`. `WALL_THICKNESS = CELL` is deliberate, not a magic number: the wall bodies fill exactly the border ring the grid marks blocked, so physics and pathing agree on which cells are solid (see the wall-pocket fix below).
 - Obstacles are generated on a **56 px grid** (24x15 cells), filling **anywhere from 0 to 1/3 of the interior**, rolled fresh every load:
@@ -69,6 +72,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `DROP_KINDS` | none - rolls what a kill leaves behind |
 | `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
+| `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
 | `run.js` | `freshGameState`, `roomFor` | owns `gameState`'s shape; turns a restart payload into the room to build |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
@@ -345,6 +349,27 @@ Verified end to end in the browser, driven through the real keys. Loaded a run t
 - **`ESC` -> `S` -> `ENTER` (Exit run)**: menu opened at Resume, moved to Exit, confirmed - same result, menu closed.
 - **An ordinary door from the same loaded state**: `gameState` carried by reference, EXP, items, curses, bombs and damage all kept, depth advanced by one.
 
+### Shot range (`bullets.js`)
+A shot dies at **336 px** - six cells of the 56 px grid - unless a wall, a rock or an enemy takes it first. Baseline, not an item or a curse: every shot, always. It replaces nothing; the existing despawns all still run, whichever comes first.
+
+Distance is accumulated per bullet from where it was **last frame**, not measured from the muzzle. Displacement would give the same answer for a bullet that flies straight, which these do - but accruing per frame means a bullet only spends range while it is actually moving, and physics stops dead during the swap prompt and the pause menu. A shot held through a pause comes out of it with its range intact rather than having quietly aged.
+
+**Does the 1200 ms lifetime still ever fire first? No - and it cannot, at any speed above 280 px/s.** At 700 px/s a bullet covers 336 px in **480 ms**, so the cap always wins with 2.5x to spare. `limitThatBinds()` says which rule is really in charge and is tested at the shipped numbers, either side of the crossover, and on the tie; `slowestSpeedRangeStillBinds()` names the 280 px/s threshold below which the timeout would start cutting shots short of their advertised range.
+
+**Left in as a backstop rather than simplified away.** It is one line, it costs nothing, and it is the only thing that would ever clean up a bullet whose distance stopped accruing. More usefully, the pair is now self-documenting: an item that slowed bullets below 280 px/s would silently shorten range, and the test is what would catch that rather than a playtester wondering why their gun felt wrong. If it is ever removed, remove `travelIn` and the crossover test with it - they exist to justify keeping it.
+
+**Measured in the browser**, obstacles cleared, 16 aim directions from open floor:
+
+| | |
+|---|---|
+| cap | 336 px |
+| last drawn distance | 326.7 - 338.3 px |
+| spread | 11.7 px - exactly one physics frame at 700 px/s |
+| time alive | 496 - 528 ms |
+| lifetime | 1200 ms, never reached |
+
+The 11.7 px spread is frame quantisation and is not removable without clamping a bullet's final position on the crossing frame, which is not worth a stuck frame of rendering. Wall hits still win when they come first: fired from 150 px out, a shot died at 58 px. Held down, the stream now visibly stops about a quarter of the way across a 1344 px room instead of reaching the far wall.
+
 ### Off-screen enemy arrows (`pings.js`)
 A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of a room's six enemies are outside the camera, and the last one alive can be minutes of screen away. One small red triangle per off-screen enemy sits on a ring inset 30 px from the edge of the screen, positioned and rotated at the bearing from the camera's centre to that enemy, repainted every frame from `update()` and hidden the frame its enemy comes into view.
 
@@ -359,7 +384,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 19 files, 278 tests, green.
+- `npx vitest run` → 20 files, 290 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
