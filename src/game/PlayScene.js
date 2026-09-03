@@ -14,7 +14,7 @@ import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
 import { canAfford, priceOf, rollShopStock, sellableItems } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
-import { freshGameState, roomFor } from './run.js'
+import { recordDoorOutcome, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
 import { ROOM_SHAPES, rollRoomShape } from './shapes.js'
@@ -196,6 +196,11 @@ const SECOND_WIND_HEAL = 1
 const REPAIR_KIT_HEAL = 2
 const BULWARK_DURATION = 2500
 const TOAST_LIFETIME = 2800
+// The misled line sits above the ordinary toast and outlives it: it is the only telling
+// the player gets that a door lied, and it must survive the "room clear" toast that an
+// empty room fires on its first frame.
+const MISLED_TOAST_OFFSET = 104
+const MISLED_TOAST_LIFETIME = 5200
 
 // The unmodified player. Items are layered on top of this by computeStats().
 const BASE_STATS = {
@@ -229,6 +234,7 @@ export class PlayScene extends Phaser.Scene {
     this.shape = room.shapeId ? ROOM_SHAPES[room.shapeId] : null
     this.gameState = room.gameState
     this.startHealth = room.health
+    this.misled = room.misled
   }
 
   create() {
@@ -539,6 +545,9 @@ export class PlayScene extends Phaser.Scene {
   // an entry line, which handed them a free look at the layout and a doorway to read it
   // from; now the fight starts where they are standing.
   populateRoom() {
+    // Before the branch: a shop returns from here without ever announcing anything.
+    this.announceMisled()
+
     if (this.roomType === 'shop') {
       this.openShop()
       return
@@ -1467,7 +1476,9 @@ export class PlayScene extends Phaser.Scene {
     // they would, so a roll of three onto a pair of narrow tips comes out as two.
     this.doors = rolled
       .slice(0, spots.length)
-      .map((door, index) => this.buildDoor(door, resolveDoor(door, Math.random), spots[index]))
+      .map((door, index) =>
+        this.buildDoor(door, resolveDoor(door, this.gameState, Math.random), spots[index])
+      )
 
     this.toast(`room clear - ${this.doors.length} doors, pick one`, '#86efac')
   }
@@ -1626,10 +1637,15 @@ ${advertised.tier}`, {
     this.doors.forEach((other) => this.closeDoor(other))
 
     const plan = roomPlanFor(door.actual)
+    // Booked here rather than at resolve time: two or three doors resolved when the room
+    // was cleared, and this is the only one the player will ever find out about.
+    const lied = recordDoorOutcome(this.gameState, door.advertised, door.actual)
+
     this.gameState.roomNumber += 1
 
     this.scene.restart({
       plan,
+      misled: lied ? door.advertised : null,
       // A shop lays its stock along one line and needs bare floor to do it, so it stays a
       // rectangle however deep the run is - see shelfSpots, which measures in screens.
       shape:
@@ -1653,8 +1669,43 @@ ${advertised.tier}`, {
     // A big room says which shape it is, because it is the first thing about it that
     // matters and the silhouette takes a walk to read from inside.
     const shape = this.shape ? ` - ${this.shape.id} big room` : ''
-
     this.toast(`${label} room - ${this.roomPlan.tier}${shape}`, '#cbd5e1')
+  }
+
+  // A lie the player never notices is not a gamble, it is the game being unreliable - so
+  // when a door misleads them they are told, by name, what it claimed.
+  //
+  // This gets its own line rather than sharing the toast slot, and it is called before
+  // populateRoom branches, for two reasons found the hard way: a shop returns from
+  // populateRoom before announceRoom is ever reached, so a lie that dropped the player in
+  // a shop was silent; and a room with nothing in it clears on its first frame, so the
+  // "room clear" toast overwrote the announcement before it could be read. Two thirds of
+  // all lies went unannounced between them.
+  announceMisled() {
+    if (!this.misled) {
+      return
+    }
+
+    const promised = DOOR_STYLE[this.misled.type].label
+    const { width, height } = this.scale
+
+    this.misledText = this.add
+      .text(
+        width / 2,
+        height - MISLED_TOAST_OFFSET,
+        `the door promised ${promised} ${this.misled.tier} - it lied`,
+        { fontFamily: 'monospace', fontSize: '20px', color: '#fb923c' }
+      )
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(HUD_DEPTH)
+
+    this.tweens.add({
+      targets: this.misledText,
+      alpha: 0,
+      delay: MISLED_TOAST_LIFETIME - 600,
+      duration: 600
+    })
   }
 
   addPickup(x, y, spec) {

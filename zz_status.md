@@ -4,7 +4,12 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, seventh pass) — door-choice regression
+## Latest session (2026-09-03, eighth pass) — the door lie budget
+The telegraph no longer lies on a flat per-door coin flip. **Each run is dealt a lie budget of 0-4** when it starts; past it every door tells the truth, and **two lies can never land back to back**. When a door does mislead you, the room says so on entry by name.
+
+Where the memory lives: **`gameState`**, because it is the only thing with exactly the right lifetime — carried through every door by reference, rebuilt by `freshGameState` on death or Exit. `lieCap`, `liesSoFar` and `lastDoorWasLie` sit beside `roomNumber`.
+
+## Previous session (2026-09-03, seventh pass) — door-choice regression
 **Reported:** clearing a room teleported straight to the next one instead of offering the 2-3 doors.
 
 **Not the cause.** The door-wait path is byte-identical to the last good build: filtered to `checkRoomCleared`, `openDoors`, `takeDoor`, `buildDoor`, `pickDoorSpots`, `nearestFreePoint` and the `leaving` guard, the whole diff since `5fcd283` is one added line, `this.payOutRoom()`. The curse/reward deletion never touched any of it, and PUZZLE's behaviour did not leak — SAFE and RISKY still gate on `enemies.getChildren().length > 0`.
@@ -68,7 +73,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2438 lines)
+### Game loop (`src/game/PlayScene.js`, 2489 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
 - Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
@@ -99,10 +104,10 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `currency.js` | `addExp`, `spendExp` | `exp` |
 | `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `rollShopStock` | none - rolls, prices, and what may be sold at all |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP` | none - rolls whether a kill leaves half a heart |
-| `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
+| `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `rollLieCap`, `isLie`, `mustBeHonest`, `MAX_LIE_CAP`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
-| `run.js` | `freshGameState`, `roomFor` | owns `gameState`'s shape; turns a restart payload into the room to build |
+| `run.js` | `freshGameState`, `roomFor`, `recordDoorOutcome` | owns `gameState`'s shape; turns a restart payload into the room to build; books what a taken door turned out to be |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |
@@ -424,6 +429,23 @@ Two things it used to do that still happen, by other means: a pickup can still b
 
 Swept in the browser over 48 room clears across all four room types: **no `reward` pickup and nothing flagged cursed, ever** - only `treasure`, `debuff`, `heal` and `shop`.
 
+### The lie budget
+A door still advertises a reward type by colour and a difficulty by glow, and still rolls `TYPE_ACCURACY` / `TIER_ACCURACY` at 0.9 each — but those rolls are now fenced by two rules that belong to the **run** rather than to the door.
+
+**A run is dealt a lie budget of 0 to 4** by `rollLieCap`, once, when it starts. Past it `resolveDoor` skips the accuracy rolls entirely and hands back exactly what was advertised. Per-door odds alone meant a long run always got lied to eventually and a short one usually did not, which made the telegraph feel like weather. A budget makes it a hand you were dealt: some runs are honest the whole way through, and the player cannot know which run they are in until it is over — which is what makes reading a door worth doing.
+
+**Two lies never land back to back.** If the door the player last walked through lied, the next resolution is forced honest whatever the roll says. One surprise is a gamble; two in a row reads as a rigged game. A forced-honest door is not a lie, so it costs nothing from the budget and clears the flag — the door after it may lie again.
+
+`mustBeHonest({ lieCap, liesSoFar, lastDoorWasLie })` is the whole gate, and `isLie(advertised, actual)` is what counts: **either channel missing is one lie, not two**, because the player walks into one room and gets one surprise out of it.
+
+**The budget is charged on the door taken, not on the doors resolved.** A room offers two or three and every one of them resolves when the doors open — but the player only ever finds out about the one they walked through, so charging for the others would spend the budget on lies nobody was told. `recordDoorOutcome` runs in `takeDoor`. Resolution still happens at open time, so the room the player picked is settled before they touch it, exactly as before.
+
+**Where the state lives, and why:** `gameState`. It is passed to every room by reference through the door payload, so `liesSoFar` and `lastDoorWasLie` survive a room change without any extra plumbing; and it is rebuilt by `freshGameState()` on death and on the pause menu's Exit, so a new run is dealt a new cap and a clean slate. Nothing else in the game has that lifetime. `freshGameState(randomFn = Math.random)` takes an injected RNG so a test can pin the cap.
+
+**Being told.** `announceMisled()` puts an orange line above the ordinary room toast: `the door promised SAFE easy - it lied`. It gets its own text object and is called **before `populateRoom` branches**, both for reasons found by measuring rather than by reading: a shop returns from `populateRoom` before `announceRoom` is ever reached, so a lie that dropped the player in a shop was silent; and a room with nothing in it clears on its first frame, so the "room clear - N doors" toast overwrote the announcement before it could be read. Between them **two thirds of all lies went unannounced** in the first cut of this.
+
+Verified over **25 runs and 300 doors taken**: 36 lies, 12% per door (was ~19% on the flat roll); **0 runs exceeded their cap**, **0 consecutive lies**, **0 lies without a message**, **0 messages on an honest door**, and all five caps 0-4 were dealt. A worked example, cap 2: lied on doors 2 and 8, then told the truth for the remaining six.
+
 ### Where a door pad goes, and when it works
 Two rules, and the second is the one that makes the guarantee.
 
@@ -511,7 +533,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 18 files, 305 tests, green. (Was 20 files / 319; deleting `rewards.test.js` and `curses.test.js` took 20 tests with them, and the rest is churn plus the new `bonusWeight` and bargain coverage.)
+- `npx vitest run` → 18 files, 333 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.

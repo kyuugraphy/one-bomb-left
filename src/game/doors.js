@@ -48,10 +48,41 @@ function otherThan(options, advertised, randomFn) {
   return others[Math.floor(randomFn() * others.length)]
 }
 
+// How many doors a whole run is allowed to lie about: 0 to 4, rolled once when the run
+// starts. Per-door odds alone meant a long run always got lied to eventually and a short
+// one usually did not, which made the telegraph feel like weather rather than a hand you
+// were dealt. A budget makes it a property of the run: some runs are honest all the way
+// through, and the player cannot know which run they are in until it is over - which is
+// what makes reading a door worth doing at all.
+export const MAX_LIE_CAP = 4
+
+export function rollLieCap(randomFn) {
+  return Math.floor(randomFn() * (MAX_LIE_CAP + 1))
+}
+
+// A door lied if either channel came out different from what it advertised. Both channels
+// missing is still **one** lie: the player walks into one room and gets one surprise, and
+// charging them twice for it would empty the budget at double speed.
+export function isLie(advertised, actual) {
+  return advertised.type !== actual.type || advertised.tier !== actual.tier
+}
+
+// When the accuracy roll is skipped and the door simply tells the truth. Two reasons, and
+// the run state carries both: the budget is spent, or the last door the player took
+// already lied. Two lies in a row reads as a rigged game rather than a gamble.
+export function mustBeHonest({ lieCap, liesSoFar, lastDoorWasLie }) {
+  return lastDoorWasLie === true || liesSoFar >= lieCap
+}
+
 // What is actually behind the door, rolled once when the doors are built rather than on
 // the walk-in, so the room the player chose is settled before they touch it. Note a miss
-// consumes one extra roll, for the substitution.
-export function resolveDoor(door, randomFn) {
+// consumes one extra roll, for the substitution - and an honest-by-force door consumes
+// none at all.
+export function resolveDoor(door, run, randomFn) {
+  if (mustBeHonest(run)) {
+    return { type: door.type, tier: door.tier }
+  }
+
   const type =
     randomFn() < TYPE_ACCURACY ? door.type : otherThan(REWARD_TYPES, door.type, randomFn)
   const tier =

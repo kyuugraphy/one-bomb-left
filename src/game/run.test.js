@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { ENTRANCE_DOOR, roomPlanFor } from './doors.js'
+import { ENTRANCE_DOOR, MAX_LIE_CAP, roomPlanFor } from './doors.js'
 import { addExp } from './currency.js'
 import { grantItem } from './grant.js'
 import { countOwned, passiveCounts } from './inventory.js'
 import { getItem } from './items.js'
-import { freshGameState, roomFor } from './run.js'
+import { freshGameState, recordDoorOutcome, roomFor } from './run.js'
 
 // A run part-way through: some EXP banked, an item in the rack, some bombs, four rooms
 // deep and standing in a hard shaped room.
@@ -176,5 +176,120 @@ describe('roomFor - walking into the next room', () => {
 
     expect(room.gameState).toBe(gameState)
     expect(room.health).toBe(0)
+  })
+})
+
+// Where the telegraph's memory lives. It has to survive a door and die with the run, and
+// gameState is the only thing in the game with exactly that lifetime - it is passed
+// through every door by reference and rebuilt by freshGameState on death or Exit.
+describe('the run lie budget', () => {
+  const advertised = { type: 'shop', tier: 'easy' }
+
+  it('rolls a cap between 0 and 4 when a run starts', () => {
+    for (let i = 0; i < 500; i++) {
+      const { lieCap } = freshGameState()
+
+      expect(lieCap).toBeGreaterThanOrEqual(0)
+      expect(lieCap).toBeLessThanOrEqual(MAX_LIE_CAP)
+    }
+  })
+
+  it('takes an injected RNG, so a test can pin the cap', () => {
+    expect(freshGameState(() => 0).lieCap).toBe(0)
+    expect(freshGameState(() => 0.99).lieCap).toBe(MAX_LIE_CAP)
+  })
+
+  it('starts a run owing nothing and remembering nothing', () => {
+    const state = freshGameState()
+
+    expect(state.liesSoFar).toBe(0)
+    expect(state.lastDoorWasLie).toBe(false)
+  })
+
+  it('books a lie and remembers it', () => {
+    const state = freshGameState(() => 0.99)
+
+    expect(recordDoorOutcome(state, advertised, { type: 'puzzle', tier: 'easy' })).toBe(true)
+    expect(state.liesSoFar).toBe(1)
+    expect(state.lastDoorWasLie).toBe(true)
+  })
+
+  it('books an honest door and forgets the last lie', () => {
+    const state = freshGameState(() => 0.99)
+
+    recordDoorOutcome(state, advertised, { type: 'puzzle', tier: 'easy' })
+    expect(recordDoorOutcome(state, advertised, { type: 'shop', tier: 'easy' })).toBe(false)
+    expect(state.liesSoFar).toBe(1)
+    expect(state.lastDoorWasLie).toBe(false)
+  })
+
+  it('charges a door that missed on both channels only once', () => {
+    const state = freshGameState(() => 0.99)
+
+    recordDoorOutcome(state, advertised, { type: 'puzzle', tier: 'hard' })
+    expect(state.liesSoFar).toBe(1)
+  })
+
+  // The budget is spent on doors the player walked through, not on doors that merely
+  // resolved: a room offers two or three and only one of them is ever found out about.
+  it('counts taken doors, so an untouched room costs nothing', () => {
+    const state = freshGameState(() => 0.99)
+
+    expect(state.liesSoFar).toBe(0)
+  })
+})
+
+describe('the lie budget across rooms and runs', () => {
+  const advertised = { type: 'shop', tier: 'easy' }
+  const spent = () => {
+    const gameState = freshGameState(() => 0.99)
+    recordDoorOutcome(gameState, advertised, { type: 'puzzle', tier: 'hard' })
+    return gameState
+  }
+
+  it('survives a door, because the same object goes through', () => {
+    const gameState = spent()
+    const room = roomFor({
+      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      carried: { gameState, health: 4 }
+    })
+
+    expect(room.gameState.liesSoFar).toBe(1)
+    expect(room.gameState.lastDoorWasLie).toBe(true)
+    expect(room.gameState.lieCap).toBe(MAX_LIE_CAP)
+  })
+
+  it('dies with the run, and the next one is dealt its own cap', () => {
+    const fresh = roomFor({}).gameState
+
+    expect(fresh.liesSoFar).toBe(0)
+    expect(fresh.lastDoorWasLie).toBe(false)
+    expect(fresh.lieCap).toBeGreaterThanOrEqual(0)
+    expect(fresh.lieCap).toBeLessThanOrEqual(MAX_LIE_CAP)
+  })
+})
+
+describe('roomFor - being told the door lied', () => {
+  it('carries what the door promised, so the room can say it was misled', () => {
+    const room = roomFor({
+      plan: roomPlanFor({ type: 'risky_reward', tier: 'hard' }),
+      misled: { type: 'safe_reward', tier: 'easy' },
+      carried: { gameState: freshGameState(), health: 3 }
+    })
+
+    expect(room.misled).toEqual({ type: 'safe_reward', tier: 'easy' })
+  })
+
+  it('says nothing was promised on an honest door', () => {
+    const room = roomFor({
+      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      carried: { gameState: freshGameState(), health: 3 }
+    })
+
+    expect(room.misled).toBe(null)
+  })
+
+  it('says nothing was promised in the entrance room, which no door chose', () => {
+    expect(roomFor({}).misled).toBe(null)
   })
 })
