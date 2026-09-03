@@ -227,3 +227,64 @@ describe('bonusWeight', () => {
     expect(computeStats(base, withWeight)).toEqual(computeStats(base, withoutWeight))
   })
 })
+
+// Placeholder art, but the data still has to hold: an icon nobody can tell apart from
+// another icon is worse than no icon, because it reads as information and is not.
+describe('item icons', () => {
+  const SHAPE_FOR_TIER = { trinket: 'star', passive: 'circle', active: 'triangle' }
+
+  test('every item has one', () => {
+    ITEMS.forEach((item) => {
+      expect(item.icon, item.id).toBeDefined()
+      expect(typeof item.icon.shape, item.id).toBe('string')
+      expect(typeof item.icon.color, item.id).toBe('number')
+    })
+  })
+
+  test('every shape is one the renderer knows how to draw', () => {
+    ITEMS.forEach((item) =>
+      expect(['star', 'circle', 'triangle', 'square']).toContain(item.icon.shape)
+    )
+  })
+
+  // The whole point: no two items may look the same.
+  test('no two items share a shape and a colour', () => {
+    const pairs = ITEMS.map((item) => `${item.icon.shape}:${item.icon.color}`)
+
+    expect(new Set(pairs).size).toBe(ITEMS.length)
+  })
+
+  // Within a shape, colour is the only thing telling two items apart, so those are the
+  // collisions that actually matter.
+  test('no two items of the same shape share a colour', () => {
+    const byShape = {}
+
+    ITEMS.forEach((item) => {
+      byShape[item.icon.shape] = byShape[item.icon.shape] ?? []
+      byShape[item.icon.shape].push(item.icon.color)
+    })
+
+    Object.entries(byShape).forEach(([shape, colors]) =>
+      expect(new Set(colors).size, shape).toBe(colors.length)
+    )
+  })
+
+  test('shape says which tier it is', () => {
+    ITEMS.filter((item) => item.source !== 'debuff').forEach((item) =>
+      expect(item.icon.shape, item.id).toBe(SHAPE_FOR_TIER[item.slot])
+    )
+  })
+
+  // Debuffs are passives by tier but get their own shape: they are the one thing the
+  // player might want to recognise on sight before deciding to walk into it.
+  test('a debuff is a square, whatever tier it technically sits in', () => {
+    itemsFrom('debuff').forEach((item) => expect(item.icon.shape).toBe('square'))
+  })
+
+  test('every colour is a real 24-bit colour', () => {
+    ITEMS.forEach((item) => {
+      expect(item.icon.color, item.id).toBeGreaterThanOrEqual(0)
+      expect(item.icon.color, item.id).toBeLessThanOrEqual(0xffffff)
+    })
+  })
+})

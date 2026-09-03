@@ -158,6 +158,15 @@ const REVEAL_SCALE = 1.9
 const REVEAL_RING_SCALE = 2.8
 const REVEAL_RING_COLOR = 0xf8fafc
 
+// Placeholder icons. Shape is the tier and colour is the item - see the icon note in
+// items.js. One drawing routine, used both on the floor and in the pause menu, so the
+// thing you picked up and the thing in your list are visibly the same object.
+const ICON_EDGE_COLOR = 0xf8fafc
+const PAUSE_ICON_SIZE = 24
+const PAUSE_ICON_STEP = 46
+const PAUSE_ICON_PER_ROW = 9
+const PAUSE_ICON_ROW_HEIGHT = 42
+
 // Off-screen enemy arrows. Only a big room can hide an enemy - a rectangular room is the
 // viewport - so these only ever appear in one. The ring is inset far enough that a whole
 // arrow fits on screen, and they draw over the HUD rather than under it: an arrow half
@@ -1752,8 +1761,19 @@ ${advertised.tier}`, {
   }
 
   addPickup(x, y, spec) {
-    const pickup = this.add.rectangle(x, y, PICKUP_SIZE, PICKUP_SIZE, spec.color)
-    pickup.setStrokeStyle(2, 0xf8fafc)
+    // An item on the floor wears its own icon, so what you picked up and what is later
+    // listed in the pause menu are recognisably the same thing. The kind colour does not
+    // go to waste: it becomes the outline, so a debuff still reads as purple-edged and a
+    // safe drop as gold-edged while the fill says which item it is.
+    //
+    // Shop stock is the exception and stays an anonymous box: the shelf deliberately sells
+    // blind - see shelfLabelFor - and an icon there would give the game away. Heals and
+    // refills carry no item at all, so they keep the plain box they always had.
+    const pickup =
+      spec.item && spec.kind !== 'shop'
+        ? this.drawItemIcon(x, y, spec.item, PICKUP_SIZE, spec.color).setStrokeStyle(3, spec.color)
+        : this.add.rectangle(x, y, PICKUP_SIZE, PICKUP_SIZE, spec.color).setStrokeStyle(2, ICON_EDGE_COLOR)
+
     pickup.spec = spec
 
     this.physics.add.existing(pickup)
@@ -1769,6 +1789,24 @@ ${advertised.tier}`, {
   // A slow pulse so a pickup reads as loot rather than another bit of level geometry. Its
   // own method because the reveal has to stop it and then put it back, for the pickups
   // that survive being revealed - one already owned, or one the rack has no room for.
+  // The one place a placeholder icon is drawn. Returns a Shape, so the caller can give it
+  // physics, tween it, or just leave it sitting in a menu.
+  //
+  // Four shapes, none of which needs a base rotation - which is what lets the pickup
+  // reveal spin one through 360 degrees and set it back to 0 without leaving it crooked.
+  drawItemIcon(x, y, item, size, edgeColor = ICON_EDGE_COLOR) {
+    const { shape, color } = item.icon
+    const half = size / 2
+    const shapes = {
+      circle: () => this.add.circle(x, y, half, color),
+      square: () => this.add.rectangle(x, y, size, size, color),
+      triangle: () => this.add.triangle(x, y, 0, size, size, size, half, 0, color),
+      star: () => this.add.star(x, y, 5, half * 0.48, half, color)
+    }
+
+    return shapes[shape]().setStrokeStyle(2, edgeColor)
+  }
+
   addLootPulse(pickup) {
     this.tweens.add({
       targets: pickup,
@@ -2382,17 +2420,14 @@ ${advertised.tier}`, {
       rows.push({ text: 'none yet', size: 15, color: '#64748b', gap: 26, left: true })
     }
 
-    // Full names here, not the three-letter HUD abbreviations - the menu is where a stack
-    // is meant to be readable, so the count and the effect ride along with it.
-    held.forEach(({ item, count }) => {
-      rows.push({
-        text: (count > 1 ? item.name + ' x' + count : item.name) + '  -  ' + item.effect,
-        size: 15,
-        color: '#cbd5e1',
-        gap: 26,
-        left: true
-      })
-    })
+    // Icons, not a list of names. The row reserves the height and the icons are drawn
+    // into it after the text layout has settled, because their x positions do not come
+    // off the same cursor the text rows use.
+    if (held.length > 0) {
+      const lines = Math.ceil(held.length / PAUSE_ICON_PER_ROW)
+
+      rows.push({ text: '', size: 12, color: '#000000', gap: lines * PAUSE_ICON_ROW_HEIGHT, icons: true })
+    }
 
     rows.push({ text: '', size: 12, color: '#000000', gap: 12 })
     rows.push({
@@ -2432,11 +2467,45 @@ ${advertised.tier}`, {
         this.pauseMenu.entryTexts[row.entry] = text
       }
 
+      if (row.icons) {
+        this.buildPassiveIcons(held, listLeft, y)
+      }
+
       y += row.gap
     })
 
     this.pinToScreen(this.pauseMenu.objects)
     this.paintPauseSelection()
+  }
+
+  // What the player is carrying, as the same icons they picked up off the floor, with a
+  // small xN under any that stack. It replaced a list of names and effects: the names are
+  // in the toast when you take one, and a wall of text was a worse answer to "what am I
+  // running" than a row of shapes.
+  buildPassiveIcons(held, left, top) {
+    held.forEach(({ item, count }, index) => {
+      const x = left + (index % PAUSE_ICON_PER_ROW) * PAUSE_ICON_STEP + PAUSE_ICON_SIZE / 2
+      const y = top + Math.floor(index / PAUSE_ICON_PER_ROW) * PAUSE_ICON_ROW_HEIGHT
+
+      const icon = this.drawItemIcon(x, y, item, PAUSE_ICON_SIZE).setDepth(PROMPT_DEPTH + 2)
+
+      this.pauseMenu.objects.push(icon)
+
+      if (count < 2) {
+        return
+      }
+
+      this.pauseMenu.objects.push(
+        this.add
+          .text(x + PAUSE_ICON_SIZE / 2 + 2, y + 6, `x${count}`, {
+            fontFamily: 'monospace',
+            fontSize: '13px',
+            color: '#e2e8f0'
+          })
+          .setOrigin(0, 0.5)
+          .setDepth(PROMPT_DEPTH + 2)
+      )
+    })
   }
 
   // The cursor is redrawn rather than moved: two rows, so re-labelling both is simpler

@@ -9,6 +9,18 @@
 // worth when it is handed out or paid for. **Nothing consumes it yet** - it is data laid
 // down ahead of the system that will use it. Hair Trigger has none on purpose; see
 // PENDING_BONUS_WEIGHT in items.test.js.
+//
+// `icon` is placeholder art, in the same register as everything else on screen: a
+// coloured geometric shape. **Shape is the tier and colour is the item**, so one glyph
+// says both what kind of thing this is and which one:
+//
+//   star      trinket      circle    passive
+//   triangle  active       square    debuff
+//
+// Every (shape, colour) pair is unique across the catalogue, which items.test.js pins.
+// The four shapes were chosen for needing no base rotation, so the pickup reveal can spin
+// one through 360 degrees and set it back to 0 without any of them ending up crooked.
+// Swap the whole block for real art later; nothing reads it but the icon drawing.
 export const TRINKET_ITEMS = [
   // The one item that costs something to wear, so the single trinket slot is a real
   // decision rather than a free upgrade.
@@ -17,6 +29,7 @@ export const TRINKET_ITEMS = [
     name: 'Heavy Vest',
     slot: 'trinket',
     source: 'treasure',
+    icon: { shape: 'star', color: 0xf59e0b },
     effect: '+2 max HP, -10% move speed',
     bonusWeight: 0.4,
     maxHpBonus: 2,
@@ -30,6 +43,7 @@ export const PASSIVE_ITEMS = [
     name: 'Iron Plating',
     slot: 'passive',
     source: 'reward',
+    icon: { shape: 'circle', color: 0x60a5fa },
     effect: '+1 max HP (half-heart)',
     bonusWeight: 0.2,
     maxHpBonus: 1
@@ -39,6 +53,7 @@ export const PASSIVE_ITEMS = [
     name: 'Twitchy Trigger',
     slot: 'passive',
     source: 'reward',
+    icon: { shape: 'circle', color: 0xfacc15 },
     effect: '-20ms fire cooldown',
     bonusWeight: 0.3,
     fireCooldownBonus: -20
@@ -48,6 +63,7 @@ export const PASSIVE_ITEMS = [
     name: 'Steady Boots',
     slot: 'passive',
     source: 'treasure',
+    icon: { shape: 'circle', color: 0x34d399 },
     effect: '+15% move speed',
     bonusWeight: 0.25,
     moveSpeedMultiplier: 1.15
@@ -57,6 +73,7 @@ export const PASSIVE_ITEMS = [
     name: 'Sharp Rounds',
     slot: 'passive',
     source: 'reward',
+    icon: { shape: 'circle', color: 0xf87171 },
     effect: '+0.5 bullet damage',
     bonusWeight: 0.35,
     damageBonus: 0.5
@@ -67,6 +84,7 @@ export const PASSIVE_ITEMS = [
     name: 'Hair Trigger',
     slot: 'passive',
     source: 'reward',
+    icon: { shape: 'circle', color: 0xfb923c },
     effect: '-35ms fire cooldown',
     fireCooldownBonus: -35
   }
@@ -78,6 +96,7 @@ export const ACTIVE_ITEMS = [
     name: 'Panic Button',
     slot: 'active',
     source: 'reward',
+    icon: { shape: 'triangle', color: 0xa3e635 },
     effect: 'damage/push back all enemies in radius',
     bonusWeight: 0.5,
     cooldown: 12000
@@ -87,6 +106,7 @@ export const ACTIVE_ITEMS = [
     name: 'Second Wind',
     slot: 'active',
     source: 'reward',
+    icon: { shape: 'triangle', color: 0x22d3ee },
     effect: 'heal 1 HP (half-heart)',
     bonusWeight: 0.3,
     cooldown: 30000
@@ -96,6 +116,7 @@ export const ACTIVE_ITEMS = [
     name: 'Bulwark',
     slot: 'active',
     source: 'reward',
+    icon: { shape: 'triangle', color: 0x818cf8 },
     effect: 'shrug off every hit for 2.5s',
     bonusWeight: 0.4,
     cooldown: 24000
@@ -105,6 +126,7 @@ export const ACTIVE_ITEMS = [
     name: 'Repair Kit',
     slot: 'active',
     source: 'reward',
+    icon: { shape: 'triangle', color: 0xf472b6 },
     effect: 'heal 2 HP (one heart)',
     bonusWeight: 0.35,
     cooldown: 45000
@@ -134,6 +156,7 @@ export const DEBUFF_ITEMS = [
     name: 'Rusty Grip',
     slot: 'passive',
     source: 'debuff',
+    icon: { shape: 'square', color: 0xef4444 },
     effect: '+1 bullet damage, -15% fire rate',
     bonusWeight: 0.3,
     damageBonus: 1,
@@ -144,6 +167,7 @@ export const DEBUFF_ITEMS = [
     name: 'Sluggish',
     slot: 'passive',
     source: 'debuff',
+    icon: { shape: 'square', color: 0x8b5cf6 },
     effect: '+1 max HP (half-heart), -15% move speed',
     bonusWeight: 0.2,
     maxHpBonus: 1,
@@ -154,6 +178,7 @@ export const DEBUFF_ITEMS = [
     name: 'Thin Skin',
     slot: 'passive',
     source: 'debuff',
+    icon: { shape: 'square', color: 0xfde047 },
     effect: '+15% move speed, -1 max HP (half-heart)',
     bonusWeight: 0.25,
     moveSpeedMultiplier: 1.15,
@@ -166,6 +191,7 @@ export const DEBUFF_ITEMS = [
     name: 'Slug Step',
     slot: 'passive',
     source: 'debuff',
+    icon: { shape: 'square', color: 0x84cc16 },
     effect: '+1 EXP per kill, but every room spawns a slug that chases you',
     bonusWeight: 0.15,
     expPerKillBonus: 1,
