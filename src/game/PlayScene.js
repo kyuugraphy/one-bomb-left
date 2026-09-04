@@ -154,6 +154,16 @@ const CORRIDOR_PLAN = {
   enemyStrengthBonus: 0
 }
 
+// The corridor's way on. A pad the size and shape of any other door, so it reads as
+// somewhere to walk into - and deliberately nothing else. No reward colour, no tier glow,
+// no pulse, no label: the telegraph already spoke when the player took the door that led
+// into this corridor, and the room it named is still the room they are walking toward. A
+// badge here would be that promise made twice, or worse, a second choice that is not
+// really on offer. Plain slate, the colour of the walls rather than of any door type.
+const CORRIDOR_EXIT_COLOR = 0xcbd5e1
+const CORRIDOR_EXIT_ALPHA = 0.22
+const CORRIDOR_EXIT_STROKE = 3
+
 const DROP_OFFSET = 84
 // A declined or just-dropped pickup stays inert until the player is this far from it, so
 // the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
@@ -1560,11 +1570,23 @@ export class PlayScene extends Phaser.Scene {
   // Unarmed, unlike a real door. Arming exists so a pad appearing underfoot cannot take a
   // *choice* away, and there is no choice here: walking on is the only thing a corridor
   // offers. A player standing at the end when the last enemy dies should simply continue.
+  //
+  // It was an invisible trigger first, which matched the brief and felt wrong to walk into
+  // - an exit you cannot see is a wall you happen to pass through. It is a pad now, and
+  // still says nothing.
   openCorridorExit() {
     const [cell] = doorCells(this.shape, this.shape.exits[0], 1)
     const spot = this.centreOf(cell)
 
-    this.corridorExit = this.add.rectangle(spot.x, spot.y, CELL, CELL, 0x000000, 0)
+    this.corridorExit = this.add.rectangle(
+      spot.x,
+      spot.y,
+      EXIT_SIZE,
+      EXIT_SIZE,
+      CORRIDOR_EXIT_COLOR,
+      CORRIDOR_EXIT_ALPHA
+    )
+    this.corridorExit.setStrokeStyle(CORRIDOR_EXIT_STROKE, CORRIDOR_EXIT_COLOR)
     this.physics.add.existing(this.corridorExit)
     this.corridorExit.body.setAllowGravity(false)
     this.corridorExit.body.setImmovable(true)
