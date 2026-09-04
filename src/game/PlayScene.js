@@ -13,9 +13,16 @@ import { grantItem } from './grant.js'
 import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
 import { canAfford, priceOf, rollShopStock, sellableItems, shelfLabelFor } from './shop.js'
-import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
+import {
+  DOOR_STYLE,
+  TIER_GLOW,
+  TWISTED_PLAN,
+  rollTwist,
+  roomPlanFor,
+  rollDoors
+} from './doors.js'
 import { DEBUFF_DROP, rollRoomDrop } from './drops.js'
-import { recordDoorOutcome, roomFor } from './run.js'
+import { recordTwist, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
 import { generateCorridorObstacles, generateCorridorRoom } from './corridor.js'
@@ -161,6 +168,12 @@ const CORRIDOR_PLAN = {
 // into this corridor, and the room it named is still the room they are walking toward. A
 // badge here would be that promise made twice, or worse, a second choice that is not
 // really on offer. Plain slate, the colour of the walls rather than of any door type.
+// The ambush sting: how low it starts and how long it takes to fall an octave from there.
+// Low enough to sit under the music that does not exist yet, long enough to land as a
+// warning rather than a click.
+const AMBUSH_STING_HZ = 110
+const AMBUSH_STING_MS = 600
+
 const CORRIDOR_EXIT_COLOR = 0xcbd5e1
 const CORRIDOR_EXIT_ALPHA = 0.22
 const CORRIDOR_EXIT_STROKE = 3
@@ -282,7 +295,7 @@ export class PlayScene extends Phaser.Scene {
     this.shape = this.shapeFor(room.shapeId)
     this.gameState = room.gameState
     this.startHealth = room.health
-    this.misled = room.misled
+    this.twisted = room.twisted
     // The room this corridor is on the way to, if this is one.
     this.pending = room.pending
   }
@@ -641,7 +654,7 @@ export class PlayScene extends Phaser.Scene {
   // from; now the fight starts where they are standing.
   populateRoom() {
     // Before the branch: a shop returns from here without ever announcing anything.
-    this.announceMisled()
+    this.announceTwist()
 
     if (this.roomType === 'shop') {
       this.openShop()
@@ -1652,9 +1665,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   // 2-3 doors along the top wall, each advertising a reward type by colour and a
-  // difficulty by glow - and each already knowing, privately, what it actually leads to.
-  // The truth is rolled here rather than on the walk-in, so the room is settled before
-  // the player touches anything.
+  // difficulty by glow - and every one of them telling the truth. A door used to resolve
+  // to something possibly different from what it advertised; it no longer can, so what is
+  // painted here is simply what is behind it.
   openDoors() {
     const rolled = rollDoors(Math.random)
     const spots = this.pickDoorSpots(rolled.length)
@@ -1663,9 +1676,7 @@ export class PlayScene extends Phaser.Scene {
     // they would, so a roll of three onto a pair of narrow tips comes out as two.
     this.doors = rolled
       .slice(0, spots.length)
-      .map((door, index) =>
-        this.buildDoor(door, resolveDoor(door, this.gameState, Math.random), spots[index])
-      )
+      .map((door, index) => this.buildDoor(door, spots[index]))
 
     // A corridor offers one door, and "1 doors, pick one" is not a sentence.
     const choice =
@@ -1674,7 +1685,7 @@ export class PlayScene extends Phaser.Scene {
     this.toast(`room clear - ${choice}`, '#86efac')
   }
 
-  buildDoor(advertised, actual, spot) {
+  buildDoor(advertised, spot) {
     const { color, label } = DOOR_STYLE[advertised.type]
     const glow = TIER_GLOW[advertised.tier]
 
@@ -1706,7 +1717,7 @@ ${advertised.tier}`, {
 
     // Unarmed until the player is clear of it - see updateDoorArming. A door that opened
     // under the player's feet would otherwise be taken on the frame it appeared.
-    const door = { advertised, actual, pad, text, pulse, armed: false }
+    const door = { advertised, pad, text, pulse, armed: false }
 
     this.physics.add.overlap(this.player, pad, () => this.takeDoor(door), null, this)
 
@@ -1827,18 +1838,30 @@ ${advertised.tier}`, {
     this.leaving = true
     this.doors.forEach((other) => this.closeDoor(other))
 
-    const plan = roomPlanFor(door.actual)
-    // Booked here rather than at resolve time: two or three doors resolved when the room
-    // was cleared, and this is the only one the player will ever find out about.
-    const lied = recordDoorOutcome(this.gameState, door.advertised, door.actual)
+    const plan = roomPlanFor(door.advertised)
+
+    // Whether this room turns hostile. Rolled here rather than on arrival, alongside the
+    // plan and the shape, so the room is settled before the scene starts - the same place
+    // and the same moment as every other property of a room. Booked here too rather than
+    // when the doors were rolled: two or three doors were offered and this is the only one
+    // the player will ever stand in, so charging the budget for the others would spend it
+    // on rooms nobody saw.
+    const twisted = rollTwist(plan, this.gameState, Math.random)
+
+    recordTwist(this.gameState, plan, twisted)
 
     this.gameState.roomNumber += 1
 
     const destination = {
-      plan,
-      misled: lied ? door.advertised : null,
-      // A shop lays its stock along one line and needs bare floor to do it, so it stays a
-      // rectangle however deep the run is - see shelfSpots, which measures in screens.
+      plan: twisted ? TWISTED_PLAN : plan,
+      // What the door said, kept only so the room can name it when it turns. null on an
+      // ordinary room, which is nearly all of them.
+      twisted: twisted ? door.advertised : null,
+      // Rolled off the **pre-twist** plan on purpose. A shop lays its stock along one line
+      // and needs bare floor to do it, so it stays a rectangle however deep the run is -
+      // see shelfSpots, which measures in screens - and a shop that turns into a fight
+      // stays the room the player thought they were walking into. Reading the twisted plan
+      // here would hand a twisted shop a big-room silhouette it never advertised.
       shape:
         plan.roomType === 'shop'
           ? null
@@ -1887,24 +1910,91 @@ ${advertised.tier}`, {
     this.toast(`${label} room - ${this.roomPlan.tier}${shape}`, '#cbd5e1')
   }
 
-  // A lie the player never notices is not a gamble, it is the game being unreliable - so
-  // when a door misleads them they are told, by name, what it claimed.
+  // A twist the player does not recognise as a twist is just the game misbehaving, so it
+  // is announced loudly and in the game's own vocabulary. AMBUSH in capitals reads as a
+  // mechanic rather than a glitch; naming the room type says exactly which promise was
+  // broken; and the sting gives it a beat that a line of text cannot.
   //
   // This gets its own line rather than sharing the toast slot, and it is called before
-  // populateRoom branches, for two reasons found the hard way: a shop returns from
-  // populateRoom before announceRoom is ever reached, so a lie that dropped the player in
-  // a shop was silent; and a room with nothing in it clears on its first frame, so the
-  // "room clear" toast overwrote the announcement before it could be read. Two thirds of
-  // all lies went unannounced between them.
-  announceMisled() {
-    if (!this.misled) {
+  // populateRoom branches, for two reasons found the hard way with the system this
+  // replaced: a shop returns from populateRoom before announceRoom is ever reached, so an
+  // announcement about a shop was silent; and a room with nothing in it clears on its
+  // first frame, so the "room clear" toast overwrote the line before it could be read.
+  announceTwist() {
+    if (!this.twisted) {
       return
     }
 
-    // Only the tier is named. The type used to be part of this line, and printing it now
-    // would be telling the player about the one channel the telegraph always gets right -
-    // which reads as though the room type were the thing that had been wrong.
-    this.notice(`the door promised ${this.misled.tier} - it lied`, '#fb923c')
+    const was = DOOR_STYLE[this.twisted.type].label.toLowerCase()
+
+    this.notice(`AMBUSH - the ${was} was a trap`, '#f87171')
+    this.playAmbushSting()
+    this.cameras.main.shake(260, 0.006)
+  }
+
+  // The project's only sound, and it carries no asset: two detuned sawtooths sliding down
+  // an octave through a closing filter, built from oscillators at the moment it plays.
+  //
+  // Synthesised rather than loaded because there is no audio pipeline here at all - no
+  // files, no preload, no Phaser sound manager - and introducing one for a single sting
+  // would be a bigger change than the mechanic it announces. It is a placeholder in the
+  // same register as the coloured rectangles everything else is drawn with, and the whole
+  // of it is replaceable by one this.sound.play() when the project takes on real audio.
+  //
+  // Wrapped in a try/catch because audio is the one thing here that can fail for reasons
+  // outside the game: a browser that blocks it, a tab with no output device, a context
+  // suspended because nothing has been clicked yet. A missing sound must not take the
+  // ambush down with it - the message is the part that matters.
+  playAmbushSting() {
+    try {
+      const Ctx = window.AudioContext ?? window.webkitAudioContext
+
+      if (!Ctx) {
+        return
+      }
+
+      this.audio = this.audio ?? new Ctx()
+
+      // Autoplay policy suspends a context created before the first gesture. By the time a
+      // room can twist the player has been pressing keys for a while, so this resolves.
+      if (this.audio.state === 'suspended') {
+        this.audio.resume()
+      }
+
+      const now = this.audio.currentTime
+      const gain = this.audio.createGain()
+      const filter = this.audio.createBiquadFilter()
+
+      filter.type = 'lowpass'
+      filter.frequency.setValueAtTime(1200, now)
+      filter.frequency.exponentialRampToValueAtTime(220, now + AMBUSH_STING_MS / 1000)
+
+      // Fast in, slow out: a growl that arrives on the same frame as the word AMBUSH.
+      gain.gain.setValueAtTime(0.0001, now)
+      gain.gain.exponentialRampToValueAtTime(0.22, now + 0.03)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + AMBUSH_STING_MS / 1000)
+
+      filter.connect(gain)
+      gain.connect(this.audio.destination)
+
+      // Two of them, a few cents apart, so the pitches beat against each other instead of
+      // sounding like one clean tone. A clean tone reads as a UI chime; this should not.
+      ;[1, 1.012].forEach((detune) => {
+        const osc = this.audio.createOscillator()
+
+        osc.type = 'sawtooth'
+        osc.frequency.setValueAtTime(AMBUSH_STING_HZ * detune, now)
+        osc.frequency.exponentialRampToValueAtTime(
+          (AMBUSH_STING_HZ / 2) * detune,
+          now + AMBUSH_STING_MS / 1000
+        )
+        osc.connect(filter)
+        osc.start(now)
+        osc.stop(now + AMBUSH_STING_MS / 1000)
+      })
+    } catch {
+      // no sound, and the ambush still reads
+    }
   }
 
   // The line above the toast. Only one at a time - a later notice replaces an earlier one,

@@ -1,7 +1,19 @@
-// The door telegraph. A cleared room offers 2-3 doors; each one says what kind of room is
-// behind it and how hard it will be, and is usually, but not always, telling the truth
-// about the second of those. Everything here is a pure roll with the RNG injected, the
-// same contract as shop.js and weights.js; the scene renders it.
+// The door telegraph, and the one surprise left in it.
+//
+// **A door never lies.** It says what kind of room is behind it and how hard that room
+// will be, and both are true. There used to be a lie system here - a door could advertise
+// one tier and open onto another - and it was removed rather than tuned, because a
+// telegraph that misreports is a telegraph the player learns to ignore, and an ignored
+// telegraph is three coloured squares with no game in them.
+//
+// What replaced it is the twist: a shop or a puzzle that turns into a fight once you are
+// standing in it. The difference is where the surprise lives. A lie was the *sign* being
+// wrong about a room that was always going to be what it was; a twist is the sign being
+// right and the room changing its mind. Nothing the player read was false, so nothing they
+// learned is worth unlearning - which is what makes the surprise survivable.
+//
+// Everything here is a pure roll with the RNG injected, the same contract as shop.js and
+// weights.js; the scene renders it.
 
 // Two doors or three, evenly. One door would not be a choice and four crowds the top
 // wall, so the range is deliberately narrow.
@@ -70,75 +82,6 @@ export function rollDoors(randomFn) {
   return doors
 }
 
-// How often a door is honest about its difficulty. The lie is the point of the system: a
-// door you can read perfectly is a menu, not a gamble - but a door that lies too often
-// teaches the player to ignore the glow entirely, which costs the telegraph its meaning.
-//
-// There used to be a TYPE_ACCURACY beside this, and the two compounded to leave a door
-// honest about both channels about four times in five. The type is never lied about now
-// (see resolveDoor), so this is the whole of it: roughly one door in ten surprises you,
-// where it used to be one in five. The lie budget therefore drains at about half the pace,
-// and more runs finish under their cap - which is a change in how often the system speaks,
-// not in how it works.
-export const TIER_ACCURACY = 0.9
-
-// A miss picks from the other options only - substituting the advertised value back in
-// would silently turn a lie into the truth and make the real accuracy higher than it says.
-function otherThan(options, advertised, randomFn) {
-  const others = options.filter((option) => option !== advertised)
-
-  return others[Math.floor(randomFn() * others.length)]
-}
-
-// How many doors a whole run is allowed to lie about: 0 to 4, rolled once when the run
-// starts. Per-door odds alone meant a long run always got lied to eventually and a short
-// one usually did not, which made the telegraph feel like weather rather than a hand you
-// were dealt. A budget makes it a property of the run: some runs are honest all the way
-// through, and the player cannot know which run they are in until it is over - which is
-// what makes reading a door worth doing at all.
-export const MAX_LIE_CAP = 4
-
-export function rollLieCap(randomFn) {
-  return Math.floor(randomFn() * (MAX_LIE_CAP + 1))
-}
-
-// A door lied if the room turned out harder or easier than the glow said. The type is not
-// compared, because resolveDoor hands it straight back and a differing one cannot happen -
-// keeping the comparison would be dead code that reads like a live rule.
-export function isLie(advertised, actual) {
-  return advertised.tier !== actual.tier
-}
-
-// When the accuracy roll is skipped and the door simply tells the truth. Two reasons, and
-// the run state carries both: the budget is spent, or the last door the player took
-// already lied. Two lies in a row reads as a rigged game rather than a gamble.
-export function mustBeHonest({ lieCap, liesSoFar, lastDoorWasLie }) {
-  return lastDoorWasLie === true || liesSoFar >= lieCap
-}
-
-// What is actually behind the door, rolled once when the doors are built rather than on
-// the walk-in, so the room the player chose is settled before they touch it. One roll to
-// decide honesty, one more only if it missed; an honest-by-force door consumes none.
-//
-// **The type is always the truth.** It used to be lied about like the tier, and that made
-// sense while colour named a *reward*: a cyan door opening onto a risky room was a gamble
-// the player could price, because both outcomes were rooms they might have chosen. With
-// safe and risky merged, colour no longer names a reward at all - it names whether this is
-// a fight, a shop or a puzzle, which is what the room *is*. An amber door that opens onto
-// a fight is not a gamble; it is the amber door meaning nothing, and a player who cannot
-// trust it stops reading it. So the whole lie budget is spent on difficulty, the one thing
-// left that the player can be wrong about and still have made a real choice.
-export function resolveDoor(door, run, randomFn) {
-  if (mustBeHonest(run)) {
-    return { type: door.type, tier: door.tier }
-  }
-
-  const tier =
-    randomFn() < TIER_ACCURACY ? door.tier : otherThan(TIERS, door.tier, randomFn)
-
-  return { type: door.type, tier }
-}
-
 // What each tag actually means once the room is built. Enemy counts are per tier, and
 // every other knob the generator reads sits beside them, so "what is a combat room" is one
 // table entry rather than a condition scattered through the scene.
@@ -204,6 +147,73 @@ export const ENTRANCE_PLAN = {
   enemyCount: ENTRANCE_ENEMIES
 }
 
+// ---- the twist -----------------------------------------------------------------------
+//
+// A shop or a puzzle can turn out to be a hard fight. Nothing at the door hints at it: the
+// pad is the ordinary amber or pink, the glow is the tier the room would have had, and
+// there is no fourth colour and no extra mark. The surprise has to be a surprise, or it is
+// just a badge that means "this might be a fight", which every door already means.
+//
+// **Combat rooms are never twisted.** A fight that turns into a fight is not a surprise,
+// and the entrance is a combat room - so without this a run could open on an ambush, which
+// is the one place the game cannot afford one.
+export const TWISTABLE_TYPES = ['shop', 'puzzle']
+
+export function canTwist(plan) {
+  return TWISTABLE_TYPES.includes(plan.type)
+}
+
+// One room in a hundred. Deliberately rare: a twist costs the player a shop they were
+// counting on or a puzzle they wanted, and a surprise that keeps happening is a tax.
+//
+// Worth knowing what this rate actually buys. Shop and puzzle together are about 43% of
+// doors, so roughly **0.4% of rooms twist** - about one per 230 rooms, or one run in
+// twenty-odd at ten rooms a run. Most runs will never see it. The fairness rules below are
+// therefore insurance rather than an active constraint at this rate, and that is a choice
+// rather than an oversight: they are what stops the tuning knob from being dangerous if
+// this number ever goes up.
+export const TWIST_CHANCE = 0.01
+
+// How many twists a whole run is allowed: 0 to 4, rolled once when the run starts. Same
+// structure the lie budget had, and kept for the same reason - a per-room probability
+// alone means a long run eventually eats one and a short run usually does not, so the
+// surprise belongs to the length of the run rather than to the run itself. A budget makes
+// it a property of the hand you were dealt.
+export const MAX_TWIST_CAP = 4
+
+export function rollTwistCap(randomFn) {
+  return Math.floor(randomFn() * (MAX_TWIST_CAP + 1))
+}
+
+// When the twist roll is skipped and the room is simply what it said it was. Two reasons,
+// and the run state carries both: the budget is spent, or the last twistable room already
+// twisted. Two twists in a row reads as the game being unfair rather than surprising.
+//
+// Note "in a row" counts **twistable** rooms, not all rooms: a fight walked between a
+// twisted puzzle and a shop does not buy the shop the right to twist. See recordTwist.
+export function mustStaySafe({ twistCap, twistsSoFar, lastRoomWasTwist }) {
+  return lastRoomWasTwist === true || twistsSoFar >= twistCap
+}
+
+// What a twisted room becomes: a hard combat room, in every respect an ordinary one. It
+// pays the ordinary room-clear drop, its enemies are the ordinary hard count, and it is
+// cleared the ordinary way. The only thing unusual about it is that the player did not
+// choose it.
+export const TWISTED_PLAN = roomPlanFor({ type: 'combat', tier: 'hard' })
+
+// Whether this room turns hostile, rolled at the door alongside the plan and the shape so
+// the room is settled before the scene ever starts - the same place and the same moment as
+// every other property of a room.
+//
+// Nothing is rolled for a room that could never twist, so a caller queueing rolls does not
+// have to know which types are eligible or what the run's budget looks like.
+export function rollTwist(plan, run, randomFn) {
+  if (!canTwist(plan) || mustStaySafe(run)) {
+    return false
+  }
+
+  return randomFn() < TWIST_CHANCE
+}
 
 // Glow is the tier, and that is now the only channel that carries a gamble. Colour still
 // tells the three room types apart, but it is a label rather than a signal: it is always

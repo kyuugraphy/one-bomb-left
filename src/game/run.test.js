@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { ENTRANCE_PLAN, MAX_LIE_CAP, roomPlanFor } from './doors.js'
+import { ENTRANCE_PLAN, MAX_TWIST_CAP, roomPlanFor } from './doors.js'
 import { addExp } from './currency.js'
 import { grantItem } from './grant.js'
 import { countOwned, passiveCounts } from './inventory.js'
 import { getItem } from './items.js'
-import { freshGameState, recordDoorOutcome, roomFor } from './run.js'
+import { freshGameState, recordTwist, roomFor } from './run.js'
 
 // A run part-way through: some EXP banked, an item in the rack, some bombs, four rooms
 // deep and standing in a hard shaped room.
@@ -182,72 +182,70 @@ describe('roomFor - walking into the next room', () => {
   })
 })
 
-describe('the run lie budget', () => {
-  const advertised = { type: 'shop', tier: 'easy' }
+// The twist budget, booked as the run walks through rooms.
+describe('the run twist budget', () => {
+  const shop = roomPlanFor({ type: 'shop', tier: 'easy' })
+  const combat = roomPlanFor({ type: 'combat', tier: 'easy' })
 
   it('rolls a cap between 0 and 4 when a run starts', () => {
     for (let i = 0; i < 500; i++) {
-      const { lieCap } = freshGameState()
+      const { twistCap } = freshGameState()
 
-      expect(lieCap).toBeGreaterThanOrEqual(0)
-      expect(lieCap).toBeLessThanOrEqual(MAX_LIE_CAP)
+      expect(twistCap).toBeGreaterThanOrEqual(0)
+      expect(twistCap).toBeLessThanOrEqual(MAX_TWIST_CAP)
     }
+
+    expect(freshGameState(() => 0.99).twistCap).toBe(MAX_TWIST_CAP)
   })
 
-  it('takes an injected RNG, so a test can pin the cap', () => {
-    expect(freshGameState(() => 0).lieCap).toBe(0)
-    expect(freshGameState(() => 0.99).lieCap).toBe(MAX_LIE_CAP)
-  })
-
-  it('starts a run owing nothing and remembering nothing', () => {
+  it('starts a run having twisted nothing', () => {
     const state = freshGameState()
 
-    expect(state.liesSoFar).toBe(0)
-    expect(state.lastDoorWasLie).toBe(false)
+    expect(state.twistsSoFar).toBe(0)
+    expect(state.lastRoomWasTwist).toBe(false)
   })
 
-  // A lie is a tier that came out wrong. The type used to be a second channel that could
-  // miss, and these tests booked their lies through it; with safe and risky merged the
-  // telegraph always tells the truth about the type, so a differing one here would be
-  // testing something the game can no longer produce.
-  it('books a lie and remembers it', () => {
+  it('books a twist and remembers it', () => {
     const state = freshGameState(() => 0.99)
 
-    expect(recordDoorOutcome(state, advertised, { type: 'shop', tier: 'hard' })).toBe(true)
-    expect(state.liesSoFar).toBe(1)
-    expect(state.lastDoorWasLie).toBe(true)
+    expect(recordTwist(state, shop, true)).toBe(true)
+    expect(state.twistsSoFar).toBe(1)
+    expect(state.lastRoomWasTwist).toBe(true)
   })
 
-  it('books an honest door and forgets the last lie', () => {
+  it('books an untwisted shop and clears the block', () => {
     const state = freshGameState(() => 0.99)
 
-    recordDoorOutcome(state, advertised, { type: 'shop', tier: 'hard' })
-    expect(recordDoorOutcome(state, advertised, { type: 'shop', tier: 'easy' })).toBe(false)
-    expect(state.liesSoFar).toBe(1)
-    expect(state.lastDoorWasLie).toBe(false)
+    recordTwist(state, shop, true)
+    expect(recordTwist(state, shop, false)).toBe(false)
+    expect(state.twistsSoFar).toBe(1)
+    expect(state.lastRoomWasTwist).toBe(false)
   })
 
-  it('charges one lie per door taken, however wrong the room turned out', () => {
+  // The rule from the spec, and the reason recordTwist takes the plan at all: a room that
+  // could never have twisted has nothing to say about whether the last one did. Walking a
+  // fight between a twisted puzzle and a shop does not buy the shop the right to twist.
+  it('leaves the block alone when the room could not have twisted', () => {
     const state = freshGameState(() => 0.99)
 
-    recordDoorOutcome(state, advertised, { type: 'shop', tier: 'hard' })
-    expect(state.liesSoFar).toBe(1)
+    recordTwist(state, shop, true)
+    recordTwist(state, combat, false)
+
+    expect(state.lastRoomWasTwist).toBe(true)
+    expect(state.twistsSoFar).toBe(1)
   })
 
-  // The budget is spent on doors the player walked through, not on doors that merely
-  // resolved: a room offers two or three and only one of them is ever found out about.
-  it('counts taken doors, so an untouched room costs nothing', () => {
+  it('counts twisted rooms, so an untouched room costs nothing', () => {
     const state = freshGameState(() => 0.99)
 
-    expect(state.liesSoFar).toBe(0)
+    expect(state.twistsSoFar).toBe(0)
   })
 })
 
-describe('the lie budget across rooms and runs', () => {
-  const advertised = { type: 'shop', tier: 'easy' }
+describe('the twist budget across rooms and runs', () => {
   const spent = () => {
     const gameState = freshGameState(() => 0.99)
-    recordDoorOutcome(gameState, advertised, { type: 'shop', tier: 'hard' })
+    recordTwist(gameState, roomPlanFor({ type: 'shop', tier: 'easy' }), true)
     return gameState
   }
 
@@ -258,30 +256,30 @@ describe('the lie budget across rooms and runs', () => {
       carried: { gameState, health: 4 }
     })
 
-    expect(room.gameState.liesSoFar).toBe(1)
-    expect(room.gameState.lastDoorWasLie).toBe(true)
-    expect(room.gameState.lieCap).toBe(MAX_LIE_CAP)
+    expect(room.gameState.twistsSoFar).toBe(1)
+    expect(room.gameState.lastRoomWasTwist).toBe(true)
+    expect(room.gameState.twistCap).toBe(MAX_TWIST_CAP)
   })
 
   it('dies with the run, and the next one is dealt its own cap', () => {
     const fresh = roomFor({}).gameState
 
-    expect(fresh.liesSoFar).toBe(0)
-    expect(fresh.lastDoorWasLie).toBe(false)
-    expect(fresh.lieCap).toBeGreaterThanOrEqual(0)
-    expect(fresh.lieCap).toBeLessThanOrEqual(MAX_LIE_CAP)
+    expect(fresh.twistsSoFar).toBe(0)
+    expect(fresh.lastRoomWasTwist).toBe(false)
+    expect(fresh.twistCap).toBeGreaterThanOrEqual(0)
+    expect(fresh.twistCap).toBeLessThanOrEqual(MAX_TWIST_CAP)
   })
 })
 
-describe('roomFor - being told the door lied', () => {
-  it('carries what the door promised, so the room can say it was misled', () => {
+describe('roomFor - being told the room twisted', () => {
+  it('carries what the door promised, so the room can say it was twisted', () => {
     const room = roomFor({
       plan: roomPlanFor({ type: 'combat', tier: 'hard' }),
-      misled: { type: 'combat', tier: 'easy' },
+      twisted: { type: 'combat', tier: 'easy' },
       carried: { gameState: freshGameState(), health: 3 }
     })
 
-    expect(room.misled).toEqual({ type: 'combat', tier: 'easy' })
+    expect(room.twisted).toEqual({ type: 'combat', tier: 'easy' })
   })
 
   it('says nothing was promised on an honest door', () => {
@@ -290,11 +288,11 @@ describe('roomFor - being told the door lied', () => {
       carried: { gameState: freshGameState(), health: 3 }
     })
 
-    expect(room.misled).toBe(null)
+    expect(room.twisted).toBe(null)
   })
 
   it('says nothing was promised in the entrance room, which no door chose', () => {
-    expect(roomFor({}).misled).toBe(null)
+    expect(roomFor({}).twisted).toBe(null)
   })
 })
 
@@ -361,7 +359,7 @@ describe('roomFor - the room a run opens in', () => {
 describe('roomFor - a corridor on the way somewhere', () => {
   const destination = {
     plan: roomPlanFor({ type: 'combat', tier: 'hard' }),
-    misled: { type: 'combat', tier: 'easy' },
+    twisted: { type: 'combat', tier: 'easy' },
     shape: 'G'
   }
 
@@ -391,7 +389,7 @@ describe('roomFor - a corridor on the way somewhere', () => {
 
   // The lie is announced where it is found out, which is the destination - not in the
   // corridor on the way to it.
-  it('keeps the misled notice with the destination, not the corridor', () => {
+  it('keeps the twisted notice with the destination, not the corridor', () => {
     const corridor = roomFor({
       plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       shape: 'corridor',
@@ -399,7 +397,7 @@ describe('roomFor - a corridor on the way somewhere', () => {
       carried: { gameState: freshGameState(), health: 3 }
     })
 
-    expect(corridor.misled).toBe(null)
-    expect(corridor.pending.misled).toEqual(destination.misled)
+    expect(corridor.twisted).toBe(null)
+    expect(corridor.pending.twisted).toEqual(destination.twisted)
   })
 })

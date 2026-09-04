@@ -33,7 +33,8 @@ export function doorCapacity(span) {
 // is long enough that a two-minute room every time would drag. In between, a room is a
 // coin flip, and when it comes up big the four shapes are an even draw.
 //
-// Note a miss costs one roll and a hit costs two - the same shape as resolveDoor().
+// Note a miss costs one roll and a hit costs two, so a caller queueing rolls has to know
+// which way this one went.
 export const SHAPE_ROOM_FIRST = 3
 export const SHAPE_ROOM_LAST = 7
 export const SHAPE_ROOM_CHANCE = 0.5

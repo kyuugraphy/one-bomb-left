@@ -4,20 +4,21 @@ import {
   ENTRANCE_DOOR,
   ENTRANCE_ENEMIES,
   ENTRANCE_PLAN,
-  MAX_LIE_CAP,
-  isLie,
-  mustBeHonest,
-  rollLieCap,
+  MAX_TWIST_CAP,
+  TWISTED_PLAN,
+  TWIST_CHANCE,
+  mustStaySafe,
+  rollTwist,
+  rollTwistCap,
   REWARD_TYPES,
   TIERS,
-  TIER_ACCURACY,
   TIER_GLOW,
   TYPE_WEIGHTS,
-  resolveDoor,
   roomPlanFor,
   rollDoorCount,
   rollDoors
 } from './doors.js'
+import { recordTwist } from './run.js'
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
 function rng(...values) {
@@ -137,79 +138,6 @@ describe('rollDoors', () => {
     }
 
     REWARD_TYPES.forEach((type) => expect(seen[type]).toBeGreaterThan(1000))
-  })
-})
-
-describe('resolveDoor', () => {
-  const gold = { type: 'shop', tier: 'easy' }
-  // A run with budget left and an honest door behind it: the state in which the accuracy
-  // rolls actually get made, which is what these tests are about.
-  const LYING_ALLOWED = { lieCap: 4, liesSoFar: 0, lastDoorWasLie: false }
-
-  it('gives what the door advertised on an honest roll', () => {
-    expect(resolveDoor(gold, LYING_ALLOWED, rng(0))).toEqual({ type: 'shop', tier: 'easy' })
-  })
-
-  // The telegraph has one channel left. Colour used to say what kind of reward was behind
-  // the door, and with safe and risky merged there is no reward kind to name - only
-  // whether this is a fight, a shop or a puzzle, which is what the room *is* rather than
-  // what it pays. A door that lies about being a shop is not a gamble the player can
-  // price; it is the amber door meaning nothing. So the type is a promise the telegraph
-  // always keeps, and the whole lie budget is spent on difficulty.
-  it('never changes the reward type, whatever the roll', () => {
-    ;[0, 0.25, 0.5, 0.75, 0.9, 0.99].forEach((first) =>
-      REWARD_TYPES.forEach((type) => {
-        const actual = resolveDoor({ type, tier: 'easy' }, LYING_ALLOWED, rng(first, 0.99, 0.99))
-
-        expect(actual.type).toBe(type)
-      })
-    )
-  })
-
-  it('gives a different tier when the tier roll misses', () => {
-    const actual = resolveDoor(gold, LYING_ALLOWED, rng(0.99, 0))
-
-    expect(actual.tier).not.toBe('easy')
-    expect(TIERS).toContain(actual.tier)
-  })
-
-  it('never substitutes the advertised tier back in', () => {
-    ;[0, 0.5, 0.99].forEach((pick) => {
-      expect(resolveDoor(gold, LYING_ALLOWED, rng(0.99, pick)).tier).not.toBe('easy')
-    })
-  })
-
-  // One roll to decide honesty, one more only if it missed. The order is the contract a
-  // test queues against, and dropping the type channel shortened it by two.
-  it('spends one roll on an honest door and two on a lying one', () => {
-    const count = (values) => {
-      let calls = 0
-      const counted = () => {
-        calls += 1
-        return values[calls - 1]
-      }
-      resolveDoor(gold, LYING_ALLOWED, counted)
-      return calls
-    }
-
-    expect(count([0, 0, 0])).toBe(1)
-    expect(count([0.99, 0, 0])).toBe(2)
-  })
-
-  it('tells the truth about the tier most of the time, but not always', () => {
-    expect(TIER_ACCURACY).toBeGreaterThanOrEqual(0.7)
-    expect(TIER_ACCURACY).toBeLessThan(1)
-  })
-
-  it('resolves every door it is handed, honest or not', () => {
-    REWARD_TYPES.forEach((type) =>
-      TIERS.forEach((tier) => {
-        const actual = resolveDoor({ type, tier }, LYING_ALLOWED, rng(0.99, 0, 0.99, 0))
-
-        expect(REWARD_TYPES).toContain(actual.type)
-        expect(TIERS).toContain(actual.tier)
-      })
-    )
   })
 })
 
@@ -336,154 +264,211 @@ describe('door presentation', () => {
   })
 })
 
-describe('rollLieCap', () => {
-  it('never lets a run be lied to more than MAX_LIE_CAP times', () => {
+describe('rollTwistCap', () => {
+  it('never lets a run be twisted more than MAX_TWIST_CAP times', () => {
     for (let i = 0; i < 5000; i++) {
-      const cap = rollLieCap(Math.random)
+      const cap = rollTwistCap(Math.random)
 
       expect(cap).toBeGreaterThanOrEqual(0)
-      expect(cap).toBeLessThanOrEqual(MAX_LIE_CAP)
+      expect(cap).toBeLessThanOrEqual(MAX_TWIST_CAP)
       expect(Number.isInteger(cap)).toBe(true)
     }
   })
 
-  // A cap of 0 is a real hand, not an off-by-one: some runs never lie at all, and the
+  // A cap of 0 is a real hand, not an off-by-one: some runs never twist at all, and the
   // player has no way to tell they are in one until it is over.
-  it('can deal a run that never lies, and a run at the full cap', () => {
-    expect(rollLieCap(() => 0)).toBe(0)
-    expect(rollLieCap(() => 0.99)).toBe(MAX_LIE_CAP)
+  it('can deal a run that never twists, and a run at the full cap', () => {
+    expect(rollTwistCap(() => 0)).toBe(0)
+    expect(rollTwistCap(() => 0.99)).toBe(MAX_TWIST_CAP)
   })
 
   it('reaches every cap in between', () => {
     const seen = new Set()
 
     for (let i = 0; i < 5000; i++) {
-      seen.add(rollLieCap(Math.random))
+      seen.add(rollTwistCap(Math.random))
     }
 
     expect([...seen].sort()).toEqual([0, 1, 2, 3, 4])
   })
 })
 
-describe('isLie', () => {
-  const gold = { type: 'shop', tier: 'easy' }
+// A shop or a puzzle can turn out to be a hard fight. The door said shop and meant it -
+// nothing about the telegraph was wrong - the room itself turns once the player is inside.
+// That is the whole difference from the lie system this replaced: a lie was the door
+// showing the wrong label, and a twist is the room going hostile.
+describe('rollTwist', () => {
+  const OPEN = { twistCap: 4, twistsSoFar: 0, lastRoomWasTwist: false }
+  const plan = (type, tier = 'easy') => roomPlanFor({ type, tier })
 
-  it('is false when the door told the truth', () => {
-    expect(isLie(gold, { type: 'shop', tier: 'easy' })).toBe(false)
+  it('can twist a shop and a puzzle', () => {
+    expect(rollTwist(plan('shop'), OPEN, () => 0)).toBe(true)
+    expect(rollTwist(plan('puzzle'), OPEN, () => 0)).toBe(true)
   })
 
-  it('is true when the tier is wrong', () => {
-    expect(isLie(gold, { type: 'shop', tier: 'hard' })).toBe(true)
+  // Combat is never twisted: a fight that turns into a fight is not a surprise, and the
+  // entrance room is a combat room, so a run could otherwise open on an ambush.
+  it('never twists a combat room, however the roll falls', () => {
+    ;[0, 0.001, 0.5, 0.99].forEach((roll) => {
+      expect(rollTwist(plan('combat'), OPEN, () => roll)).toBe(false)
+      expect(rollTwist(plan('combat', 'hard'), OPEN, () => roll)).toBe(false)
+    })
   })
 
-  // The type is not a channel the telegraph can miss on any more - resolveDoor hands it
-  // straight back - so a differing type is not a lie, it is a caller with a bug. Asking
-  // about it here would keep a dead comparison alive on the strength of a test.
-  it('reads only the tier, the one channel that can be wrong', () => {
-    expect(isLie(gold, { type: 'puzzle', tier: 'easy' })).toBe(false)
-    expect(isLie(gold, { type: 'puzzle', tier: 'hard' })).toBe(true)
+  it('twists on a roll under the chance and not on one at or above it', () => {
+    expect(rollTwist(plan('shop'), OPEN, () => TWIST_CHANCE - 0.0001)).toBe(true)
+    expect(rollTwist(plan('shop'), OPEN, () => TWIST_CHANCE)).toBe(false)
+    expect(rollTwist(plan('shop'), OPEN, () => 0.5)).toBe(false)
+  })
+
+  it('is a one-in-a-hundred surprise', () => {
+    expect(TWIST_CHANCE).toBe(0.01)
+  })
+
+  it('refuses when the run has no budget left', () => {
+    const spent = { twistCap: 1, twistsSoFar: 1, lastRoomWasTwist: false }
+
+    expect(rollTwist(plan('shop'), spent, () => 0)).toBe(false)
+  })
+
+  it('refuses straight after a twist', () => {
+    const justTwisted = { twistCap: 4, twistsSoFar: 1, lastRoomWasTwist: true }
+
+    expect(rollTwist(plan('shop'), justTwisted, () => 0)).toBe(false)
+  })
+
+  // Nothing is spent deciding a room that was never going to twist, so a caller queueing
+  // rolls does not have to know which room types are eligible.
+  it('spends a roll only on a room that could actually twist', () => {
+    const count = (roomPlan, run) => {
+      let calls = 0
+      rollTwist(roomPlan, run, () => {
+        calls += 1
+        return 0
+      })
+      return calls
+    }
+
+    expect(count(plan('shop'), OPEN)).toBe(1)
+    expect(count(plan('combat'), OPEN)).toBe(0)
+    expect(count(plan('shop'), { twistCap: 0, twistsSoFar: 0, lastRoomWasTwist: false })).toBe(0)
+  })
+
+  it('turns a twisted room into a hard combat room', () => {
+    expect(TWISTED_PLAN.type).toBe('combat')
+    expect(TWISTED_PLAN.tier).toBe('hard')
+    expect(TWISTED_PLAN.roomType).toBe('combat')
+    expect(TWISTED_PLAN.enemyCount).toBe(roomPlanFor({ type: 'combat', tier: 'hard' }).enemyCount)
   })
 })
 
-describe('mustBeHonest', () => {
-  const run = (lieCap, liesSoFar, lastDoorWasLie) => ({ lieCap, liesSoFar, lastDoorWasLie })
-
-  it('lets a fresh run with budget lie', () => {
-    expect(mustBeHonest(run(4, 0, false))).toBe(false)
+describe('mustStaySafe', () => {
+  const run = (twistCap, twistsSoFar, lastRoomWasTwist) => ({
+    twistCap,
+    twistsSoFar,
+    lastRoomWasTwist
   })
 
-  it('stops lying once the budget is spent', () => {
-    expect(mustBeHonest(run(2, 1, false))).toBe(false)
-    expect(mustBeHonest(run(2, 2, false))).toBe(true)
-    expect(mustBeHonest(run(2, 3, false))).toBe(true)
+  it('lets a fresh run with budget twist', () => {
+    expect(mustStaySafe(run(4, 0, false))).toBe(false)
   })
 
-  it('never lies at all on a run capped at zero', () => {
-    expect(mustBeHonest(run(0, 0, false))).toBe(true)
+  it('stops twisting once the budget is spent', () => {
+    expect(mustStaySafe(run(2, 1, false))).toBe(false)
+    expect(mustStaySafe(run(2, 2, false))).toBe(true)
+    expect(mustStaySafe(run(2, 3, false))).toBe(true)
   })
 
-  // The consecutive rule: one lie in a row is a gamble, two is a rigged game.
-  it('forces honesty straight after a lie, even with budget to spare', () => {
-    expect(mustBeHonest(run(4, 1, true))).toBe(true)
+  it('never twists at all on a run capped at zero', () => {
+    expect(mustStaySafe(run(0, 0, false))).toBe(true)
   })
 
-  it('lets the door after that lie again', () => {
-    expect(mustBeHonest(run(4, 1, false))).toBe(false)
+  // The consecutive rule: one twist is a surprise, two in a row is the game being unfair.
+  it('forces safety straight after a twist, even with budget to spare', () => {
+    expect(mustStaySafe(run(4, 1, true))).toBe(true)
+  })
+
+  it('lets the room after that twist again', () => {
+    expect(mustStaySafe(run(4, 1, false))).toBe(false)
   })
 })
 
 // The two rules together, walked through as a run would walk through them.
-describe('the telegraph across a whole run', () => {
-  const alwaysMiss = () => 0.99
-  const advertised = { type: 'shop', tier: 'easy' }
-  const resolveWith = (run) => resolveDoor(advertised, run, alwaysMiss)
+describe('twists across a whole run', () => {
+  const alwaysTwist = () => 0
+  const shop = roomPlanFor({ type: 'shop', tier: 'easy' })
+  const combat = roomPlanFor({ type: 'combat', tier: 'easy' })
 
-  it('cannot lie twice in a row however hard the roll misses', () => {
-    const run = { lieCap: 4, liesSoFar: 0, lastDoorWasLie: false }
+  // Entering a room and booking whatever came of it, the way takeDoor does.
+  const enter = (run, plan, randomFn) => {
+    const twisted = rollTwist(plan, run, randomFn)
+
+    recordTwist(run, plan, twisted)
+
+    return twisted
+  }
+
+  it('cannot twist twice in a row however the roll falls', () => {
+    const run = { twistCap: 4, twistsSoFar: 0, lastRoomWasTwist: false }
     const outcomes = []
 
-    for (let door = 0; door < 8; door++) {
-      const actual = resolveWith(run)
-      const lied = isLie(advertised, actual)
-
-      outcomes.push(lied)
-      run.lastDoorWasLie = lied
-      if (lied) {
-        run.liesSoFar += 1
-      }
+    for (let room = 0; room < 8; room++) {
+      outcomes.push(enter(run, shop, alwaysTwist))
     }
 
-    outcomes.forEach((lied, i) => {
+    outcomes.forEach((twisted, i) => {
       if (i > 0) {
-        expect(lied && outcomes[i - 1]).toBe(false)
+        expect(twisted && outcomes[i - 1]).toBe(false)
       }
     })
   })
 
-  it('spends the budget and then tells the truth for the rest of the run', () => {
-    for (let cap = 0; cap <= MAX_LIE_CAP; cap++) {
-      const run = { lieCap: cap, liesSoFar: 0, lastDoorWasLie: false }
-      let lies = 0
+  // The rule the spec was explicit about: a combat room in between does **not** clear the
+  // block. Twist a puzzle, walk a fight, and the next shop is a real shop.
+  it('keeps the block across an intervening combat room', () => {
+    const run = { twistCap: 4, twistsSoFar: 0, lastRoomWasTwist: false }
 
-      for (let door = 0; door < 40; door++) {
-        const actual = resolveWith(run)
-        const lied = isLie(advertised, actual)
+    expect(enter(run, shop, alwaysTwist)).toBe(true)
+    enter(run, combat, alwaysTwist)
+    expect(run.lastRoomWasTwist).toBe(true)
+    expect(enter(run, shop, alwaysTwist)).toBe(false)
+    expect(enter(run, shop, alwaysTwist)).toBe(true)
+  })
 
-        run.lastDoorWasLie = lied
-        if (lied) {
-          run.liesSoFar += 1
-          lies += 1
+  it('spends the cap and then stays safe for the rest of the run', () => {
+    for (let cap = 0; cap <= MAX_TWIST_CAP; cap++) {
+      const run = { twistCap: cap, twistsSoFar: 0, lastRoomWasTwist: false }
+      let twists = 0
+
+      for (let room = 0; room < 40; room++) {
+        if (enter(run, shop, alwaysTwist)) {
+          twists += 1
         }
       }
 
-      expect(lies).toBe(cap)
+      expect(twists).toBe(cap)
     }
   })
 
-  // With every roll missing, a run alternates lie / honest until the budget is gone -
-  // so the cap is reached in exactly twice as many doors, and never sooner.
-  it('takes at least two doors per lie, so a cap of 4 needs 7 doors to spend', () => {
-    const run = { lieCap: 4, liesSoFar: 0, lastDoorWasLie: false }
-    let doors = 0
+  // With every roll twisting, a run alternates twist / safe until the cap is gone - so a
+  // cap of 4 takes seven twistable rooms to spend, and never fewer.
+  it('takes at least two twistable rooms per twist', () => {
+    const run = { twistCap: 4, twistsSoFar: 0, lastRoomWasTwist: false }
+    let rooms = 0
 
-    while (run.liesSoFar < 4 && doors < 100) {
-      const lied = isLie(advertised, resolveWith(run))
-
-      run.lastDoorWasLie = lied
-      if (lied) {
-        run.liesSoFar += 1
-      }
-      doors += 1
+    while (run.twistsSoFar < 4 && rooms < 100) {
+      enter(run, shop, alwaysTwist)
+      rooms += 1
     }
 
-    expect(doors).toBe(7)
+    expect(rooms).toBe(7)
   })
 
-  it('never lies at all on a zero-cap run, whatever the rolls say', () => {
-    const run = { lieCap: 0, liesSoFar: 0, lastDoorWasLie: false }
+  it('never twists at all on a zero-cap run, whatever the rolls say', () => {
+    const run = { twistCap: 0, twistsSoFar: 0, lastRoomWasTwist: false }
 
-    for (let door = 0; door < 20; door++) {
-      expect(resolveWith(run)).toEqual(advertised)
+    for (let room = 0; room < 20; room++) {
+      expect(enter(run, shop, alwaysTwist)).toBe(false)
     }
   })
 })

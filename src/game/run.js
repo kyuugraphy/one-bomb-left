@@ -10,7 +10,7 @@
 // straight back - which is why every fresh-run restart passes `{}` explicitly.
 
 import { CORRIDOR_FLOOR_DOORS, rollCorridorDoors } from './corridor.js'
-import { ENTRANCE_PLAN, isLie, rollLieCap } from './doors.js'
+import { ENTRANCE_PLAN, canTwist, rollTwistCap } from './doors.js'
 import { createInventory } from './inventory.js'
 
 // The run's own state, everything that survives a door and nothing that survives a death.
@@ -21,14 +21,14 @@ export function freshGameState(randomFn = Math.random) {
     // How deep the run is. The entrance is room 1, and every door taken adds one; the
     // big-room band is measured against it.
     roomNumber: 1,
-    // The telegraph's budget for this run and what it has spent. These live in gameState
-    // rather than in the scene because that is exactly the lifetime they need: gameState
-    // is passed through every door by reference, so the count survives a room change, and
-    // it is rebuilt by freshGameState on death or Exit, so a new run gets a new budget
-    // and a clean slate. Nothing else has that shape.
-    lieCap: rollLieCap(randomFn),
-    liesSoFar: 0,
-    lastDoorWasLie: false,
+    // The twist budget for this run and what it has spent. These live in gameState rather
+    // than in the scene because that is exactly the lifetime they need: gameState is
+    // passed through every door by reference, so the count survives a room change, and it
+    // is rebuilt by freshGameState on death or Exit, so a new run gets a new budget and a
+    // clean slate. Nothing else has that shape.
+    twistCap: rollTwistCap(randomFn),
+    twistsSoFar: 0,
+    lastRoomWasTwist: false,
     // How many doors the player has walked through, which is not the same as how many
     // rooms they have been in: a corridor is spliced in behind a door and costs a door
     // without costing a room. roomNumber counts rooms, this counts doors, and the two
@@ -42,20 +42,27 @@ export function freshGameState(randomFn = Math.random) {
   }
 }
 
-// Booked when the player actually walks through a door, not when the door was resolved.
-// A room offers two or three doors and every one of them resolved to something, but the
-// player only ever finds out about the one they took - so charging the budget for the
-// others would spend it on lies nobody was told.
-export function recordDoorOutcome(gameState, advertised, actual) {
-  const lied = isLie(advertised, actual)
-
-  gameState.lastDoorWasLie = lied
-
-  if (lied) {
-    gameState.liesSoFar += 1
+// Booked when the player actually walks through a door, not when the doors were rolled: a
+// room offers two or three and the player only ever enters one, so charging the budget for
+// the others would spend it on rooms nobody saw.
+//
+// **The plan is taken so a room that could never have twisted leaves the block alone.**
+// That is the spec's rule rather than an implementation detail: twist a puzzle, walk a
+// fight, and the next shop is still a real shop. If a combat room cleared the flag the
+// no-consecutive rule would almost never fire, because combat is well over half of all
+// doors - the block would be lifted by the very next room nearly every time.
+export function recordTwist(gameState, plan, twisted) {
+  if (!canTwist(plan)) {
+    return twisted
   }
 
-  return lied
+  gameState.lastRoomWasTwist = twisted
+
+  if (twisted) {
+    gameState.twistsSoFar += 1
+  }
+
+  return twisted
 }
 
 // Unpack a restart payload into the room to build. `health: null` means "as much as this
@@ -69,9 +76,9 @@ export function roomFor(data) {
     shapeId: data?.shape ?? null,
     gameState: data?.carried?.gameState ?? freshGameState(),
     health: data?.carried?.health ?? null,
-    // What the door claimed, when it turned out to be lying. null on an honest door and
-    // on the entrance room, which no door chose.
-    misled: data?.misled ?? null,
+    // What the door said this room was, when the room turned out to be a fight instead.
+    // null on an ordinary room and on the entrance, which no door chose.
+    twisted: data?.twisted ?? null,
     // The room this corridor is on the way to, held while the player walks it. null in
     // every room that is not a corridor.
     pending: data?.pending ?? null
