@@ -105,3 +105,48 @@ export function rollShopStock(entries, randomFn) {
 
   return stock
 }
+
+// Why a purchase cannot land, or null if it can. **Asks without doing**: nothing here
+// mutates, so the exit gate can ask it about every item on the shelf every frame.
+//
+// It exists because affordable and buyable are not the same thing, and a softlock found in
+// play proved it. A shop holds its doors shut until the visit is over, and "over" was read
+// as "nothing here is affordable" - so a player at full HP, holding exactly the price of an
+// HP Refill and not a point more, could not buy the refill, could not afford anything else,
+// and could not leave. The affordable item held the doors shut; the refusal held the
+// purchase off; nothing in the room could break the tie.
+//
+// Both the refusal path and the exit gate read this, rather than each working it out, so
+// the two cannot drift into disagreeing about what a finished visit is - which is exactly
+// how the softlock got in.
+export function purchaseBlockedReason(entry, { gameState, health, maxHp }) {
+  if (entry.kind === 'hp_refill') {
+    return health >= maxHp ? 'already at full HP' : null
+  }
+
+  // Bombs stack with no ceiling.
+  if (entry.kind !== 'item') {
+    return null
+  }
+
+  const { item } = entry
+
+  // Passives are uncapped and stack in computeStats, so holding one is never a reason not
+  // to buy another - which is the point of the tier.
+  if (item.slot === 'passive') {
+    return null
+  }
+
+  // Checked before the rack, the same order grantItem uses: a duplicate is not a placement
+  // problem, so it must not report itself as one.
+  if (countOwned(gameState.inventory, item.id) > 0) {
+    return 'already owned'
+  }
+
+  // One slot, so a trinket replaces rather than refuses.
+  if (item.slot === 'trinket') {
+    return null
+  }
+
+  return gameState.inventory.actives.includes(null) ? null : 'no room - free a slot first'
+}

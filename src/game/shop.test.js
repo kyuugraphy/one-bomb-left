@@ -8,6 +8,7 @@ import {
   SHOP_PRICES,
   canAfford,
   priceOf,
+  purchaseBlockedReason,
   rollShopStock,
   sellableItems,
   shelfLabelFor
@@ -267,5 +268,89 @@ describe('shelfLabelFor', () => {
     ITEMS.forEach((item) =>
       expect(shelfLabelFor({ kind: 'item', item })).not.toContain(item.effect)
     )
+  })
+})
+
+// Why a purchase cannot land, asked without making it land.
+//
+// This exists because of a **softlock found in play**: a shop holds its doors shut until
+// the visit is over, and "over" was read as "nothing here is affordable". Affordable is
+// not the same as buyable. A player at full HP, holding exactly the price of an HP Refill
+// and not a point more, could not buy the refill (no HP to restore), could not afford
+// anything else, and could not leave - the affordable item kept the doors shut and the
+// refusal kept the purchase from landing.
+//
+// So the question the shop has to ask is "is there anything here they could actually
+// complete", and both the refusal path and the exit gate now ask it here rather than each
+// working it out for itself.
+describe('purchaseBlockedReason', () => {
+  const at = (health, maxHp, inventory = createInventory()) => ({
+    gameState: { inventory },
+    health,
+    maxHp
+  })
+  const item = (id) => ({ kind: 'item', item: getItem(id) })
+
+  it('lets an ordinary purchase through', () => {
+    expect(purchaseBlockedReason(item('iron_plating'), at(3, 6))).toBe(null)
+  })
+
+  it('blocks an HP Refill at full health, and allows it below', () => {
+    expect(purchaseBlockedReason({ kind: 'hp_refill' }, at(6, 6))).toBe('already at full HP')
+    expect(purchaseBlockedReason({ kind: 'hp_refill' }, at(5, 6))).toBe(null)
+  })
+
+  // Bombs stack with no ceiling, so this one can always be bought.
+  it('never blocks a bomb refill', () => {
+    expect(purchaseBlockedReason({ kind: 'bomb_refill' }, at(6, 6))).toBe(null)
+  })
+
+  it('blocks an active already held', () => {
+    const inventory = createInventory()
+    inventory.actives[0] = getItem('panic_button')
+
+    expect(purchaseBlockedReason(item('panic_button'), at(3, 6, inventory))).toBe('already owned')
+  })
+
+  it('blocks a trinket already worn, and allows a different one', () => {
+    const inventory = createInventory()
+    inventory.trinket = getItem('heavy_vest')
+
+    expect(purchaseBlockedReason(item('heavy_vest'), at(3, 6, inventory))).toBe('already owned')
+  })
+
+  it('blocks a new active when the rack is full', () => {
+    const inventory = createInventory()
+    inventory.actives[0] = getItem('panic_button')
+    inventory.actives[1] = getItem('second_wind')
+    inventory.actives[2] = getItem('bulwark')
+
+    expect(purchaseBlockedReason(item('repair_kit'), at(3, 6, inventory)))
+      .toBe('no room - free a slot first')
+  })
+
+  // Passives are uncapped and stack, so owning one is never a reason not to buy another.
+  it('never blocks a passive, however many are already held', () => {
+    const inventory = createInventory()
+    inventory.passives.push(getItem('iron_plating'), getItem('iron_plating'))
+
+    expect(purchaseBlockedReason(item('iron_plating'), at(3, 6, inventory))).toBe(null)
+  })
+
+  // The whole point: it changes nothing. shopIsDone asks it about every item on the shelf
+  // on the frame it is asked, so an answer that cost the player an item would be a bug
+  // that fired every frame.
+  it('does not touch the inventory or the health it is asked about', () => {
+    const inventory = createInventory()
+    inventory.actives[0] = getItem('panic_button')
+    const snapshot = JSON.stringify(inventory)
+    const state = at(4, 6, inventory)
+
+    purchaseBlockedReason(item('repair_kit'), state)
+    purchaseBlockedReason({ kind: 'hp_refill' }, state)
+    purchaseBlockedReason(item('iron_plating'), state)
+
+    expect(JSON.stringify(inventory)).toBe(snapshot)
+    expect(state.health).toBe(4)
   })
 })

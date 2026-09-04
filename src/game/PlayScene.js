@@ -12,7 +12,14 @@ import { computeStats } from './effects.js'
 import { grantItem } from './grant.js'
 import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
-import { canAfford, priceOf, rollShopStock, sellableItems, shelfLabelFor } from './shop.js'
+import {
+  canAfford,
+  priceOf,
+  purchaseBlockedReason,
+  rollShopStock,
+  sellableItems,
+  shelfLabelFor
+} from './shop.js'
 import {
   DOOR_STYLE,
   TIER_GLOW,
@@ -1507,12 +1514,19 @@ export class PlayScene extends Phaser.Scene {
   }
 
   applyPurchase(entry) {
-    if (entry.kind === 'hp_refill') {
-      if (this.health >= this.stats.maxHp) {
-        return { success: false, message: 'already at full HP' }
-      }
+    // Asked here and in shopIsDone from the same place, so the exit gate and the refusal
+    // can never disagree about what a finished visit is. They did once, and it sealed a
+    // player in - see purchaseBlockedReason.
+    const blocked = purchaseBlockedReason(entry, this.purchaseContext())
 
+    if (blocked) {
+      return { success: false, message: blocked }
+    }
+
+    if (entry.kind === 'hp_refill') {
       this.health = this.stats.maxHp
+      this.refreshHealthBar()
+
       this.refreshHealthBar()
 
       return { success: true, message: 'HP Refill: back to full' }
@@ -1524,15 +1538,16 @@ export class PlayScene extends Phaser.Scene {
       return { success: true, message: 'Bomb Refill: +1 bomb' }
     }
 
-    const granted = grantItem(this.gameState, entry.item)
-
-    if (!granted.success) {
-      const reason = granted.reason === 'owned' ? 'already owned' : 'no room - free a slot first'
-
-      return { success: false, message: reason }
-    }
+    grantItem(this.gameState, entry.item)
 
     return { success: true, message: `${entry.item.name}: ${entry.item.effect}` }
+  }
+
+  // What purchaseBlockedReason needs to answer: the run, and the health it is measured
+  // against. maxHp comes off this.stats rather than the inventory, because a trinket or a
+  // passive can have moved it since the room was built.
+  purchaseContext() {
+    return { gameState: this.gameState, health: this.health, maxHp: this.stats.maxHp }
   }
 
   // The overlap re-fires every frame while standing on the stock, so the refusal speaks on
@@ -1651,17 +1666,30 @@ export class PlayScene extends Phaser.Scene {
   }
 
   // A shop holds its exit shut until the visit is over, so a guarded one cannot be walked
-  // out of before its guards have been dealt with. The escape hatch is affordability: a
-  // player who cannot pay for anything on the shelf has no purchase to make, and EXP only
-  // comes from kills, so without this they would be sealed in a room with nothing to do.
+  // out of before its guards have been dealt with. The escape hatch is that there is
+  // nothing here to buy - a player with no purchase to make has no way to finish the
+  // visit, and EXP only comes from kills, so without this they would be sealed in.
+  //
+  // **"Nothing to buy" is not the same as "nothing affordable"**, which is what this asked
+  // before and what sealed a player in anyway: at full HP, holding exactly the price of an
+  // HP Refill and not a point more, the refill was affordable and unbuyable at once, so the
+  // doors stayed shut on a shelf with nothing on it for them. A shelf item only counts as a
+  // reason to stay if the player could both pay for it and complete it.
   shopIsDone() {
     if (this.roomType !== 'shop' || this.shopSpent) {
       return true
     }
 
+    const context = this.purchaseContext()
+
     return !this.pickups
       .getChildren()
-      .some((pickup) => pickup.spec.kind === 'shop' && canAfford(this.gameState, pickup.spec.price))
+      .some(
+        (pickup) =>
+          pickup.spec.kind === 'shop' &&
+          canAfford(this.gameState, pickup.spec.price) &&
+          !purchaseBlockedReason(pickup.spec.entry, context)
+      )
   }
 
   // 2-3 doors along the top wall, each advertising a reward type by colour and a
