@@ -262,6 +262,29 @@ export class PlayScene extends Phaser.Scene {
     this.misled = room.misled
   }
 
+  // Where the camera is allowed to look, which is not the same as where the room is.
+  //
+  // Phaser keeps the camera inside its bounds, and a clamp with nothing to give pins it at
+  // the near edge: hand it a 280 px wide corridor and the camera sticks at scrollX 0, so
+  // the room draws hard against the left of a 1344 px viewport however the player moves.
+  // Nothing here was computing an offset and getting it wrong - there was no offset.
+  //
+  // So an axis where the room is smaller than the screen gets the *screen's* size for its
+  // bounds, with the slack hung evenly off both sides; the clamp then has exactly one
+  // position to settle on, and that position is centred. An axis where the room is at
+  // least as big as the screen is untouched and scrolls as it always did - which is every
+  // axis of every rectangular and big room, so none of them move.
+  cameraBoundsFor(width, height) {
+    const view = { width: this.scale.width, height: this.scale.height }
+
+    return [
+      Math.min(0, (width - view.width) / 2),
+      Math.min(0, (height - view.height) / 2),
+      Math.max(width, view.width),
+      Math.max(height, view.height)
+    ]
+  }
+
   shapeFor(shapeId) {
     if (!shapeId) {
       return null
@@ -279,7 +302,7 @@ export class PlayScene extends Phaser.Scene {
       : { width: this.scale.width, height: this.scale.height }
 
     this.physics.world.setBounds(0, 0, width, height)
-    this.cameras.main.setBounds(0, 0, width, height)
+    this.cameras.main.setBounds(...this.cameraBoundsFor(width, height))
 
     this.stats = computeStats(BASE_STATS, this.gameState.inventory)
     this.nextFireAt = 0
@@ -1744,8 +1767,13 @@ ${advertised.tier}`, {
   announceRoom() {
     const { label } = DOOR_STYLE[this.roomPlan.type]
     // A big room says which shape it is, because it is the first thing about it that
-    // matters and the silhouette takes a walk to read from inside.
-    const shape = this.shape ? ` - ${this.shape.id} big room` : ''
+    // matters and the silhouette takes a walk to read from inside. A corridor just says
+    // corridor: "corridor big room" is not a thing, and a corridor is not big anyway.
+    const shape = !this.shape
+      ? ''
+      : this.shape.id === 'corridor'
+        ? ' - corridor'
+        : ` - ${this.shape.id} big room`
     this.toast(`${label} room - ${this.roomPlan.tier}${shape}`, '#cbd5e1')
   }
 
