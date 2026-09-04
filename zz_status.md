@@ -4,7 +4,10 @@ _Last updated: 2026-09-03_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-03, thirteenth pass) — corridor rooms, part one
+## Latest session (2026-09-04) — corridors, finished and walkable
+Obstacles and doors both landed, and a corridor can be walked in the browser. The debug `L` key now cycles **L, Z, T, G, corridor**.
+
+## Previous session (2026-09-03, thirteenth pass) — corridor rooms, part one
 `generateCorridorRoom(randomFn)` is in: a corridor's orientation and dimensions, test-first, pure. It hands back the same shape object the L/Z/T/G masks are, so everything in `shapeRoom.js` reads it unchanged — but it is **rolled rather than hand-authored**, because a corridor has no silhouette worth drawing and its mask would otherwise be sixty lines of hashes.
 
 **Obstacles and doors are deliberately not done.** The shape carries no `entry` or `exits` yet, so it cannot be handed to the scene.
@@ -124,14 +127,14 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `shelfLabelFor`, `rollShopStock` | none - rolls, prices, what may be sold, and what the shelf gives away |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP` | none - rolls whether a kill leaves half a heart |
 | `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `rollLieCap`, `isLie`, `mustBeHonest`, `MAX_LIE_CAP`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
-| `obstacles.js` | `rollCoverage`, `generateObstacles`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
+| `obstacles.js` | `rollCoverage`, `generateObstacles`, `reachesEveryOpenCell`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
 | `run.js` | `freshGameState`, `roomFor`, `recordDoorOutcome` | owns `gameState`'s shape; turns a restart payload into the room to build; books what a taken door turned out to be |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |
 | `shapes.js` | `ROOM_SHAPES`, `rollRoomShape`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS`, `SHAPE_ROOM_*` | none - data plus the depth-band roll, RNG injected |
-| `corridor.js` | `generateCorridorRoom`, `CORRIDOR_WALKABLE_WIDTH`, `CORRIDOR_MIN_LENGTH`, `CORRIDOR_MAX_LENGTH`, `CORRIDOR_WALL_RING` | none - rolls a corridor's orientation and size, RNG injected |
+| `corridor.js` | `generateCorridorRoom`, `generateCorridorObstacles`, `corridorReservedCells`, `CORRIDOR_WALKABLE_WIDTH`, `CORRIDOR_MIN_LENGTH`, `CORRIDOR_MAX_LENGTH`, `CORRIDOR_WALL_RING`, `CORRIDOR_COVERAGE_MIN`, `CORRIDOR_COVERAGE_MAX` | none - rolls a whole corridor, RNG injected |
 | `shapeRoom.js` | `roomSize`, `cellCentre`, `innerCell`, `solidGrid`, `wallCells`, `wallRun`, `splitDoors`, `doorCells`, `DOOR_INSET` | none - reads a mask, returns grids, cells and world points; `splitDoors` takes an injected RNG |
 | `items.js` | `TRINKET_ITEMS`, `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `DEBUFF_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
 | `effects.js` | `computeStats(base, inventory)`, `MIN_MAX_HP` | none - returns a fresh stats object, `expPerKill` among them |
@@ -465,7 +468,28 @@ Three across rather than two because a 36 px enemy in a straight run with nowher
 
 Verified on the real output: 672 px at the shortest and 3360 px at the longest, 168 px across in both orientations, **50.6% horizontal over 20,000 rolls**, and all 49 walkable lengths reachable.
 
-**Still to do:** obstacles at 10-15% coverage, and a door at each far end. One thing to decide first — `generateObstacles` seeds shapes with `pickSeed`, which biases two thirds of them into a 3-cell band hugging the wall. In a corridor only 3 cells wide **every** cell is in that band, so the near-wall bias stops meaning anything and a single rock can span a third of the width. Corridors may need their own placement rule rather than just the lower density.
+**Obstacles and doors are done** — see the two sections below.
+
+### Corridor obstacles and doors
+**Obstacles are placed uniformly, not by `pickSeed`.** The base-room generator seeds two thirds of every shape into a 3-cell band hugging the wall — and a corridor is 3 cells wide, so the whole width is that band and the bias buys nothing but clustering. It also grows rocks into clumps of up to 8 cells and pits into noodles of up to 12, either of which spans a corridor end to end. So corridor obstacles are **single cells**, drawn uniformly without replacement, tagged rock or pit at the same 0.6 split, at **10-15%** coverage rolled per corridor and rounded rather than floored (a 36-cell corridor cannot land on a tenth exactly).
+
+What it does share is the connectivity check. `keepsRoomWalkable`'s flood fill came out of `obstacles.js` as exported **`reachesEveryOpenCell`**: corridors place by their own rule, but "did that cut the room in half" is the same question wherever it is asked. A candidate that cuts the corridor is dropped and another cell tried, the same way `generateObstacles` rejects a shape rather than a whole layout.
+
+**Rejection rate, measured over 20,000 corridors:** 4.61% of candidate cells thrown away, 42.6% of corridors seeing at least one rejection, worst case 7. Higher than a naive `p³` guess because at 3 wide a **3-cell diagonal staircase blocks under 4-neighbour movement** — you do not need a full column. Per-cell rejection means density is always met; the rate climbs with length (14.5% of corridors affected at length 12, 64.2% at length 60) simply because there are more places to cut.
+
+**Doors sit at the middle of each far end wall, and nowhere else.** A long side is 33 cells of unbroken wall on a middling corridor and would seat three doors if anything let it; a corridor with a side door is a junction.
+
+**Entry at one end, exit at the other, with a roll for which end is the way in.** That was a finding, not a preference: an end wall is 5 cells, `doorCapacity` turns that into exactly **one** door, and one of the two ends has to be the entry because that is where the scene spawns the player. So a corridor offers one door where a room offers two or three, and `openDoors` needed no telling — it already trusts the spots it gets back rather than the roll. A corridor is the bit between choices, not a choice.
+
+**One reserved-cells idea, not two.** `corridorReservedCells` holds back the door pads and the landing spot before any obstacle is placed. It replaced a rule that kept one cell of each *end column* open, which was a proxy for "the door is reachable" and loose in both directions: a pad sits `DOOR_INSET` cells in from the wall, so the end column could be solid without hurting anything, while a rock on the pad itself passed the check and **buried the door in about one corridor in eight**. Now 0 of 5,000.
+
+The test's end-to-end flood fill moved with it: **"end to end" means door pad to door pad**, not first walkable column to last. The old reading failed 0.4% of corridors over a column behind the door that nobody can walk to; the pads themselves connect in 5,000 of 5,000.
+
+**Scene wiring.** `shapeFor` rolls a corridor rather than looking one up — its mask is generated, so there is no `ROOM_SHAPES` entry to find — and it rolls in `init`, so the room is settled before `create` reads it. `buildObstacles` routes corridors to their own generator. The debug `L` key cycles **L, Z, T, G, corridor**. "room clear - 1 doors, pick one" now reads "room clear - one way on".
+
+**Walked in the browser.** A 40x5 vertical corridor, 280x2240 px: spawn at one end, door at the other, 12 obstacles at 10.5% coverage, both enemies pathing the full 39 cells down it. Steered end to end through the real movement keys in 389 frames (6.5 s), dodging rocks, and took the door into room 2. A horizontal one comes out 5x54, 3024x280 px. Note holding a single direction is not enough to cross one — a rock in the middle lane stops you until you sidestep, which is the corridor doing its job.
+
+**Not wired into the run yet.** `rollRoomShape` deals only L/Z/T/G in the 3-7 band, so a corridor is reachable only through the debug key. Where corridors belong in a run — between rooms, as their own band, or as connectors that do not count as a room at all — is undecided.
 
 ### Placeholder item icons
 A coloured geometric shape per item, in the same register as the player, the enemies and everything else on screen. **Shape is the tier, colour is the item**, so one glyph says both what kind of thing this is and which one:
@@ -641,7 +665,7 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 
 ### Tooling
 - `npm run dev` / `build` / `preview` / `test` wired up.
-- `npx vitest run` → 19 files, 366 tests, green.
+- `npx vitest run` → 19 files, 394 tests, green.
 - **Driving the game from a browser-automation tool has three traps**, all hit while verifying the pause menu:
   1. A tool's instant key *press* is too fast for Phaser's per-frame `JustDown` — the key goes down and up inside one frame. Dispatch `keydown`, wait ~120 ms (or a few `requestAnimationFrame`s), then `keyup`.
   2. **Dispatch each keydown to one target only.** Firing the same event at `window`, `document`, `body` and the canvas in one go leaves `justDown` *false*: Phaser treats the 2nd-4th as auto-repeat of a key that is already down.
