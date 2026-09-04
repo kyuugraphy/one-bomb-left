@@ -2,14 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { DOOR_INSET, doorCells, innerCell, solidGrid, wallCells, wallRun } from './shapeRoom.js'
 import { doorCapacity } from './shapes.js'
 import {
+  CORRIDORS_PER_FLOOR_MAX,
+  CORRIDORS_PER_FLOOR_MIN,
   CORRIDOR_COVERAGE_MAX,
   CORRIDOR_COVERAGE_MIN,
+  CORRIDOR_FLOOR_DOORS,
   CORRIDOR_MAX_LENGTH,
   CORRIDOR_MIN_LENGTH,
   CORRIDOR_WALKABLE_WIDTH,
   CORRIDOR_WALL_RING,
   generateCorridorObstacles,
-  generateCorridorRoom
+  generateCorridorRoom,
+  rollCorridorDoors
 } from './corridor.js'
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
@@ -704,6 +708,175 @@ describe('doors and obstacles together', () => {
 
       expect(coverage).toBeGreaterThanOrEqual(CORRIDOR_COVERAGE_MIN - 1 / walk)
       expect(coverage).toBeLessThanOrEqual(CORRIDOR_COVERAGE_MAX + 1 / walk)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------
+// Where corridors land in a floor
+// ---------------------------------------------------------------------------------
+
+const gaps = (doors) => doors.slice(1).map((door, i) => door - doors[i])
+
+const averageGap = (doorCount, runs = 4000) => {
+  let total = 0
+  let seen = 0
+
+  for (let i = 0; i < runs; i++) {
+    gaps(rollCorridorDoors(doorCount, Math.random)).forEach((gap) => {
+      total += gap
+      seen += 1
+    })
+  }
+
+  return total / seen
+}
+
+describe('rollCorridorDoors', () => {
+  const FLOOR = CORRIDOR_FLOOR_DOORS
+
+  it('deals between one and three corridors to a floor', () => {
+    for (let i = 0; i < 2000; i++) {
+      const doors = rollCorridorDoors(FLOOR, Math.random)
+
+      expect(doors.length).toBeGreaterThanOrEqual(CORRIDORS_PER_FLOOR_MIN)
+      expect(doors.length).toBeLessThanOrEqual(CORRIDORS_PER_FLOOR_MAX)
+    }
+  })
+
+  it('deals all three counts, not one fixed number', () => {
+    const counts = new Set()
+
+    for (let i = 0; i < 2000; i++) {
+      counts.add(rollCorridorDoors(FLOOR, Math.random).length)
+    }
+
+    expect([...counts].sort()).toEqual([1, 2, 3])
+  })
+
+  it('picks door-takings that exist', () => {
+    for (let i = 0; i < 2000; i++) {
+      rollCorridorDoors(FLOOR, Math.random).forEach((door) => {
+        expect(door).toBeGreaterThanOrEqual(0)
+        expect(door).toBeLessThan(FLOOR)
+        expect(Number.isInteger(door)).toBe(true)
+      })
+    }
+  })
+
+  it('hands them back sorted, with no door named twice', () => {
+    for (let i = 0; i < 2000; i++) {
+      const doors = rollCorridorDoors(FLOOR, Math.random)
+
+      expect([...doors].sort((a, b) => a - b)).toEqual(doors)
+      expect(new Set(doors).size).toBe(doors.length)
+    }
+  })
+
+  // The spread constraint, and the whole reason this is rolled for a floor rather than per
+  // door: two corridors back to back read as the game padding itself out.
+  it('never puts two corridors on consecutive doors', () => {
+    for (let i = 0; i < 5000; i++) {
+      gaps(rollCorridorDoors(FLOOR, Math.random)).forEach((gap) =>
+        expect(gap).toBeGreaterThanOrEqual(2)
+      )
+    }
+  })
+
+  // The "one every two or three rooms" target, checked on the floor it was written for.
+  // Floor 1 is 7 rooms, and there the mean gap comes out at 2.8.
+  it('keeps them roughly one every two or three rooms on a floor-1 sized floor', () => {
+    const meanGap = averageGap(7)
+
+    expect(meanGap).toBeGreaterThan(2)
+    expect(meanGap).toBeLessThan(3.2)
+  })
+
+  // On a longer floor they necessarily spread: the count stays 1-3 however many rooms
+  // there are, so a 15-room floor is one corridor every 7 or 8 rooms rather than every 3.
+  // That is what "1-3 per floor" means at that size, not a bug - but it is worth a test
+  // saying so, because the two halves of the design only agree at floor-1 length.
+  it('spreads them further apart as a floor gets longer', () => {
+    expect(averageGap(7)).toBeLessThan(averageGap(11))
+    expect(averageGap(11)).toBeLessThan(averageGap(15))
+  })
+
+  it('keeps the gaps sane at the default floor size', () => {
+    const meanGap = averageGap(FLOOR)
+
+    expect(meanGap).toBeGreaterThan(2.5)
+    expect(meanGap).toBeLessThan(4.5)
+  })
+
+  // A corridor must be able to land anywhere in the floor, not just early: pre-rolling is
+  // only fair if the whole span is reachable.
+  it('can land on any door of the floor across enough runs', () => {
+    const seen = new Set()
+
+    for (let i = 0; i < 4000; i++) {
+      rollCorridorDoors(FLOOR, Math.random).forEach((door) => seen.add(door))
+    }
+
+    expect(seen.size).toBe(FLOOR)
+  })
+
+  // Needs an even door count to mean anything: reversing a valid selection gives another
+  // valid one, so the distribution is symmetric about the middle - but on an odd floor the
+  // middle door falls on one side of the split and drags it off 50/50 on its own. That
+  // artefact is why CORRIDOR_FLOOR_DOORS is even.
+  it('does not crowd them all into the first half', () => {
+    expect(FLOOR % 2).toBe(0)
+
+    let firstHalf = 0
+    let all = 0
+
+    for (let i = 0; i < 4000; i++) {
+      rollCorridorDoors(FLOOR, Math.random).forEach((door) => {
+        all += 1
+        if (door < FLOOR / 2) {
+          firstHalf += 1
+        }
+      })
+    }
+
+    expect(firstHalf / all).toBeGreaterThan(0.45)
+    expect(firstHalf / all).toBeLessThan(0.55)
+  })
+
+  // A floor too short to hold three non-adjacent corridors gets what fits, rather than
+  // looping forever or handing back two on touching doors. Floor 1 is 7 rooms, but the
+  // count is the floor's own and later floors run to 15 and beyond.
+  it('takes what a short floor can hold', () => {
+    for (let doorCount = 1; doorCount <= 6; doorCount++) {
+      for (let i = 0; i < 400; i++) {
+        const doors = rollCorridorDoors(doorCount, Math.random)
+
+        expect(doors.length).toBeGreaterThanOrEqual(1)
+        expect(doors.length).toBeLessThanOrEqual(Math.ceil(doorCount / 2))
+        gaps(doors).forEach((gap) => expect(gap).toBeGreaterThanOrEqual(2))
+        doors.forEach((door) => expect(door).toBeLessThan(doorCount))
+      }
+    }
+  })
+
+  it('gives the same floor to the same rolls', () => {
+    const seeded = () => {
+      let i = 0
+      const q = [0.7, 0.2, 0.55, 0.9, 0.1, 0.3]
+
+      return () => q[i++ % q.length]
+    }
+
+    expect(rollCorridorDoors(CORRIDOR_FLOOR_DOORS, seeded())).toEqual(
+      rollCorridorDoors(CORRIDOR_FLOOR_DOORS, seeded())
+    )
+  })
+
+  it('leaves most of the floor free of them', () => {
+    for (let i = 0; i < 500; i++) {
+      const doors = rollCorridorDoors(CORRIDOR_FLOOR_DOORS, Math.random)
+
+      expect(doors.length).toBeLessThan(CORRIDOR_FLOOR_DOORS / 2)
     }
   })
 })

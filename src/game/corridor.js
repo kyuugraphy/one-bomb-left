@@ -164,3 +164,57 @@ export function generateCorridorObstacles(shape, randomFn) {
 
   return { blocked, shapes, coverage: shapes.length / open.length, rejected }
 }
+
+// How many corridors a floor gets. Rare enough to be a surprise, common enough that a
+// floor usually has one: a corridor is a pause between rooms, and a run made mostly of
+// pauses is a run that has stopped.
+export const CORRIDORS_PER_FLOOR_MIN = 1
+export const CORRIDORS_PER_FLOOR_MAX = 3
+
+// A stand-in for the floor's own room count until floor logic exists. Floor 1 is 7 rooms,
+// Floor 2 is 9-11 and the rest run to 15 and beyond, so this is mid-range rather than any
+// real floor - rollCorridorDoors takes the count, and a real floor will pass its own.
+//
+// Even on purpose. Reversing a valid selection gives another valid one, so corridors are
+// distributed symmetrically about the middle of a floor; on an odd floor the middle door
+// falls on one side of a halfway split and skews it by itself, which would make the
+// even-spread test measure that artefact rather than the property.
+export const CORRIDOR_FLOOR_DOORS = 10
+
+// Which door-takings of a floor have a corridor spliced in behind them.
+//
+// Rolled for the whole floor up front rather than per door, and that is sound because the
+// number of doors taken on a floor does not depend on which doors are taken: one per room,
+// always. Two things follow that a live roll could not give. The count is exactly 1-3 -
+// a per-door probability can only aim at that and will sometimes deal none or four. And
+// the spread constraint becomes a property of the construction rather than a retry: the
+// indices are chosen non-adjacent, so nothing has to remember whether the last door had a
+// corridor and reroll when it did.
+//
+// The construction: pick `count` distinct values out of `doorCount - count + 1`, sort
+// them, and add each one's position to it. That maps every plain combination onto exactly
+// one selection with gaps of at least two, and back, so the draw stays uniform over the
+// spread-out selections rather than favouring the ones a rejection loop finds first.
+export function rollCorridorDoors(doorCount, randomFn) {
+  if (doorCount <= 0) {
+    return []
+  }
+
+  // A floor too short for three spread-out corridors takes what it can hold: alternating
+  // doors is the tightest a no-two-in-a-row rule allows.
+  const fits = Math.ceil(doorCount / 2)
+  const spread = CORRIDORS_PER_FLOOR_MAX - CORRIDORS_PER_FLOOR_MIN + 1
+  const count = Math.min(
+    fits,
+    CORRIDORS_PER_FLOOR_MIN + Math.floor(randomFn() * spread)
+  )
+
+  const slots = Array.from({ length: doorCount - count + 1 }, (_, slot) => slot)
+  const picked = []
+
+  for (let i = 0; i < count; i++) {
+    picked.push(...slots.splice(Math.floor(randomFn() * slots.length), 1))
+  }
+
+  return picked.sort((a, b) => a - b).map((slot, i) => slot + i)
+}
