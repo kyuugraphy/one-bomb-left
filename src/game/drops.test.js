@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { DROP_CHANCE, HEAL_DROP, rollEnemyDrop } from './drops.js'
+import {
+  CLEAN_DROP,
+  DEBUFF_DROP,
+  DEBUFF_DROP_SHARE,
+  DROP_CHANCE,
+  HEAL_DROP,
+  rollEnemyDrop,
+  rollRoomDrop
+} from './drops.js'
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
 function rng(...values) {
@@ -87,5 +95,66 @@ describe('rollEnemyDrop', () => {
     }
 
     expect(healed / kills).toBeGreaterThan((DROP_CHANCE / 3) * 2.8)
+  })
+})
+
+// What clearing a room hands over, now that SAFE and RISKY are one type.
+//
+// The old rule read the door: a safe room always paid a clean item, a risky one always
+// paid a debuff, and which you got was settled the moment you picked a colour. With one
+// combat type there is no colour left to read, so the payout becomes a roll - and it has
+// to be a roll rather than a constant, or every room in the game would pay the same thing
+// and clearing one would stop being worth anything in particular.
+describe('rollRoomDrop', () => {
+  it('pays a debuff-paired item on a low roll', () => {
+    expect(rollRoomDrop(rng(0))).toBe(DEBUFF_DROP)
+    expect(rollRoomDrop(rng(0.3))).toBe(DEBUFF_DROP)
+    expect(rollRoomDrop(rng(DEBUFF_DROP_SHARE - 0.0001))).toBe(DEBUFF_DROP)
+  })
+
+  it('pays a clean item on anything from the share upward', () => {
+    expect(rollRoomDrop(rng(DEBUFF_DROP_SHARE))).toBe(CLEAN_DROP)
+    expect(rollRoomDrop(rng(0.8))).toBe(CLEAN_DROP)
+    expect(rollRoomDrop(rng(0.99))).toBe(CLEAN_DROP)
+  })
+
+  // Unlike an enemy drop, a cleared room always pays something. The roll picks which kind,
+  // never whether - a room you fought through and got nothing for is a room you would
+  // rather have walked past.
+  it('never pays nothing', () => {
+    for (let sample = 0; sample < 20000; sample++) {
+      const drop = rollRoomDrop(Math.random)
+
+      expect(drop === DEBUFF_DROP || drop === CLEAN_DROP).toBe(true)
+    }
+  })
+
+  it('splits 60/40 in favour of the debuff', () => {
+    expect(DEBUFF_DROP_SHARE).toBe(0.6)
+
+    const rooms = 100000
+    let debuffs = 0
+
+    for (let i = 0; i < rooms; i++) {
+      if (rollRoomDrop(Math.random) === DEBUFF_DROP) {
+        debuffs += 1
+      }
+    }
+
+    // +/- 0.5 points either side, which is about 3 standard deviations at this sample.
+    expect(debuffs / rooms).toBeGreaterThan(0.595)
+    expect(debuffs / rooms).toBeLessThan(0.605)
+  })
+
+  it('spends exactly one roll, so a caller can queue against it', () => {
+    let calls = 0
+    const counted = () => {
+      calls += 1
+      return 0.5
+    }
+
+    rollRoomDrop(counted)
+
+    expect(calls).toBe(1)
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ENTRANCE_DOOR, MAX_LIE_CAP, roomPlanFor } from './doors.js'
+import { ENTRANCE_PLAN, MAX_LIE_CAP, roomPlanFor } from './doors.js'
 import { addExp } from './currency.js'
 import { grantItem } from './grant.js'
 import { countOwned, passiveCounts } from './inventory.js'
@@ -20,7 +20,7 @@ function runInProgress() {
 }
 
 const doorPayload = (gameState, health) => ({
-  plan: roomPlanFor({ type: 'risky_reward', tier: 'hard' }),
+  plan: roomPlanFor({ type: 'combat', tier: 'hard' }),
   shape: 'G',
   carried: { gameState, health }
 })
@@ -83,7 +83,10 @@ describe('roomFor - starting a fresh run', () => {
     emptyPayloads.forEach((payload) => {
       const room = roomFor(payload)
 
-      expect(room.plan).toEqual(roomPlanFor(ENTRANCE_DOOR))
+      // the entrance plan, not roomPlanFor(ENTRANCE_DOOR): the entrance holds one enemy
+      // where an easy combat door holds four
+      expect(room.plan).toEqual(ENTRANCE_PLAN)
+      expect(room.plan.enemyCount).toBe(1)
       expect(room.gameState.roomNumber).toBe(1)
     })
   })
@@ -161,7 +164,7 @@ describe('roomFor - walking into the next room', () => {
   it('reads a shapeless door payload as a rectangle, not as a fresh run', () => {
     const gameState = runInProgress()
     const room = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'medium' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'medium' }),
       carried: { gameState, health: 3 }
     })
 
@@ -179,9 +182,6 @@ describe('roomFor - walking into the next room', () => {
   })
 })
 
-// Where the telegraph's memory lives. It has to survive a door and die with the run, and
-// gameState is the only thing in the game with exactly that lifetime - it is passed
-// through every door by reference and rebuilt by freshGameState on death or Exit.
 describe('the run lie budget', () => {
   const advertised = { type: 'shop', tier: 'easy' }
 
@@ -206,10 +206,14 @@ describe('the run lie budget', () => {
     expect(state.lastDoorWasLie).toBe(false)
   })
 
+  // A lie is a tier that came out wrong. The type used to be a second channel that could
+  // miss, and these tests booked their lies through it; with safe and risky merged the
+  // telegraph always tells the truth about the type, so a differing one here would be
+  // testing something the game can no longer produce.
   it('books a lie and remembers it', () => {
     const state = freshGameState(() => 0.99)
 
-    expect(recordDoorOutcome(state, advertised, { type: 'puzzle', tier: 'easy' })).toBe(true)
+    expect(recordDoorOutcome(state, advertised, { type: 'shop', tier: 'hard' })).toBe(true)
     expect(state.liesSoFar).toBe(1)
     expect(state.lastDoorWasLie).toBe(true)
   })
@@ -217,16 +221,16 @@ describe('the run lie budget', () => {
   it('books an honest door and forgets the last lie', () => {
     const state = freshGameState(() => 0.99)
 
-    recordDoorOutcome(state, advertised, { type: 'puzzle', tier: 'easy' })
+    recordDoorOutcome(state, advertised, { type: 'shop', tier: 'hard' })
     expect(recordDoorOutcome(state, advertised, { type: 'shop', tier: 'easy' })).toBe(false)
     expect(state.liesSoFar).toBe(1)
     expect(state.lastDoorWasLie).toBe(false)
   })
 
-  it('charges a door that missed on both channels only once', () => {
+  it('charges one lie per door taken, however wrong the room turned out', () => {
     const state = freshGameState(() => 0.99)
 
-    recordDoorOutcome(state, advertised, { type: 'puzzle', tier: 'hard' })
+    recordDoorOutcome(state, advertised, { type: 'shop', tier: 'hard' })
     expect(state.liesSoFar).toBe(1)
   })
 
@@ -243,14 +247,14 @@ describe('the lie budget across rooms and runs', () => {
   const advertised = { type: 'shop', tier: 'easy' }
   const spent = () => {
     const gameState = freshGameState(() => 0.99)
-    recordDoorOutcome(gameState, advertised, { type: 'puzzle', tier: 'hard' })
+    recordDoorOutcome(gameState, advertised, { type: 'shop', tier: 'hard' })
     return gameState
   }
 
   it('survives a door, because the same object goes through', () => {
     const gameState = spent()
     const room = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       carried: { gameState, health: 4 }
     })
 
@@ -272,17 +276,17 @@ describe('the lie budget across rooms and runs', () => {
 describe('roomFor - being told the door lied', () => {
   it('carries what the door promised, so the room can say it was misled', () => {
     const room = roomFor({
-      plan: roomPlanFor({ type: 'risky_reward', tier: 'hard' }),
-      misled: { type: 'safe_reward', tier: 'easy' },
+      plan: roomPlanFor({ type: 'combat', tier: 'hard' }),
+      misled: { type: 'combat', tier: 'easy' },
       carried: { gameState: freshGameState(), health: 3 }
     })
 
-    expect(room.misled).toEqual({ type: 'safe_reward', tier: 'easy' })
+    expect(room.misled).toEqual({ type: 'combat', tier: 'easy' })
   })
 
   it('says nothing was promised on an honest door', () => {
     const room = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       carried: { gameState: freshGameState(), health: 3 }
     })
 
@@ -325,7 +329,7 @@ describe('doors taken and rooms entered', () => {
     gameState.roomNumber = 4
 
     const room = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       carried: { gameState, health: 3 }
     })
 
@@ -341,16 +345,29 @@ describe('doors taken and rooms entered', () => {
   })
 })
 
+describe('roomFor - the room a run opens in', () => {
+  it('opens on the entrance plan when no door chose the room', () => {
+    const room = roomFor({})
+
+    expect(room.plan).toEqual(ENTRANCE_PLAN)
+    expect(room.plan.enemyCount).toBe(1)
+  })
+
+  it('opens gently on a fresh restart too, not on the combat table', () => {
+    expect(roomFor(undefined).plan.enemyCount).toBe(1)
+  })
+})
+
 describe('roomFor - a corridor on the way somewhere', () => {
   const destination = {
-    plan: roomPlanFor({ type: 'risky_reward', tier: 'hard' }),
-    misled: { type: 'safe_reward', tier: 'easy' },
+    plan: roomPlanFor({ type: 'combat', tier: 'hard' }),
+    misled: { type: 'combat', tier: 'easy' },
     shape: 'G'
   }
 
   it('holds the room the corridor is on the way to', () => {
     const room = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       shape: 'corridor',
       pending: destination,
       carried: { gameState: freshGameState(), health: 3 }
@@ -361,7 +378,7 @@ describe('roomFor - a corridor on the way somewhere', () => {
 
   it('holds nothing pending in an ordinary room', () => {
     const room = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       carried: { gameState: freshGameState(), health: 3 }
     })
 
@@ -376,7 +393,7 @@ describe('roomFor - a corridor on the way somewhere', () => {
   // corridor on the way to it.
   it('keeps the misled notice with the destination, not the corridor', () => {
     const corridor = roomFor({
-      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      plan: roomPlanFor({ type: 'combat', tier: 'easy' }),
       shape: 'corridor',
       pending: destination,
       carried: { gameState: freshGameState(), health: 3 }

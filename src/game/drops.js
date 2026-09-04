@@ -21,3 +21,30 @@ export const HEAL_DROP = 'heal'
 export function rollEnemyDrop(randomFn) {
   return randomFn() < DROP_CHANCE ? HEAL_DROP : null
 }
+
+// ---- what clearing a room pays -------------------------------------------------------
+//
+// A different table from the one above, living here because this is the drop module and
+// two drop rules are better together than in a file of their own.
+//
+// The old rule was not a roll at all: a safe room always paid a clean item and a risky one
+// always paid a debuff, so the payout was settled the moment the player picked a colour.
+// With safe and risky merged into one combat type there is no colour left to read it off,
+// and making every room pay the same thing would leave clearing one worth nothing in
+// particular. So it is rolled, and the gamble moves from which door you took to what the
+// room turns out to give you.
+export const DEBUFF_DROP_SHARE = 0.6
+
+export const DEBUFF_DROP = 'debuff'
+export const CLEAN_DROP = 'clean'
+
+// Weighted toward the debuff on purpose. Every one of them is a bargain rather than a
+// punishment - a real bonus with a real cost - so the common payout being the one with a
+// price attached is what keeps a run from becoming a pile of free upgrades. The clean item
+// is the lighter outcome, and the rarer one.
+//
+// Unlike an enemy drop this never answers with nothing: a room the player fought through
+// always pays. The roll picks which kind, never whether.
+export function rollRoomDrop(randomFn) {
+  return randomFn() < DEBUFF_DROP_SHARE ? DEBUFF_DROP : CLEAN_DROP
+}

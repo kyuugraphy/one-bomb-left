@@ -14,6 +14,7 @@ import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
 import { canAfford, priceOf, rollShopStock, sellableItems, shelfLabelFor } from './shop.js'
 import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './doors.js'
+import { DEBUFF_DROP, rollRoomDrop } from './drops.js'
 import { recordDoorOutcome, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
@@ -133,7 +134,7 @@ const DEBUG_SHAPE_KEY = true
 const DEBUG_SHAPE_CYCLE = ['L', 'Z', 'T', 'G', 'corridor']
 // A packed room, not the entrance's single enemy: the point of walking the L is watching
 // several of them find their way round its corner.
-const DEBUG_SHAPE_PLAN = { type: 'risky_reward', tier: 'medium' }
+const DEBUG_SHAPE_PLAN = { type: 'combat', tier: 'medium' }
 
 if (DEBUG_SHAPE_KEY) {
   console.warn(
@@ -1299,7 +1300,7 @@ export class PlayScene extends Phaser.Scene {
   //
   // Weighted, not even: a passive already stacked twice comes up at a quarter of the odds
   // of one never seen, so the pool keeps opening up as the run goes on.
-  spawnSafePickup(x, y) {
+  spawnCleanPickup(x, y) {
     this.addPickup(x, y, {
       kind: 'treasure',
       item: this.rollFrom([...itemsFrom('treasure'), ...itemsFrom('reward')]),
@@ -1612,24 +1613,28 @@ export class PlayScene extends Phaser.Scene {
     })
   }
 
-  // Clearing a room pays exactly one item, decided by the door that led here rather than
-  // rolled: a safe room hands over something curse-free, a risky one hands over a debuff.
-  // A shop has already sold you what it was going to, and a puzzle room is a stub with
-  // nothing to give yet. Runs once, because openDoors() is what stops checkRoomCleared
-  // coming back round.
+  // Clearing a combat room pays exactly one item, and **which kind is rolled here rather
+  // than settled by the door**. It used to be read straight off the door type - a safe
+  // room paid clean, a risky one paid a debuff - so the payout was decided the moment the
+  // player picked a colour. With safe and risky merged there is no colour to read it off,
+  // and the gamble moves from which door you took to what the room turns out to give you.
+  //
+  // Gated on roomType rather than on the plan's type so a shop, a puzzle and a corridor
+  // all still pay nothing: a shop has already sold you what it was going to, a puzzle is a
+  // stub, and a corridor is the bit between rooms. Runs once, because openDoors() is what
+  // stops checkRoomCleared coming back round.
   payOutRoom() {
-    const payouts = {
-      safe_reward: (x, y) => this.spawnSafePickup(x, y),
-      risky_reward: (x, y) => this.spawnDebuffPickup(x, y)
-    }
-    const payout = payouts[this.roomPlan.type]
-
-    if (!payout) {
+    if (this.roomType !== 'combat') {
       return
     }
 
     const spot = this.freeSpotNear(this.player.x, this.player.y)
-    payout(spot.x, spot.y)
+
+    if (rollRoomDrop(Math.random) === DEBUFF_DROP) {
+      this.spawnDebuffPickup(spot.x, spot.y)
+    } else {
+      this.spawnCleanPickup(spot.x, spot.y)
+    }
   }
 
   // A shop holds its exit shut until the visit is over, so a guarded one cannot be walked
@@ -1896,9 +1901,10 @@ ${advertised.tier}`, {
       return
     }
 
-    const promised = DOOR_STYLE[this.misled.type].label
-
-    this.notice(`the door promised ${promised} ${this.misled.tier} - it lied`, '#fb923c')
+    // Only the tier is named. The type used to be part of this line, and printing it now
+    // would be telling the player about the one channel the telegraph always gets right -
+    // which reads as though the room type were the thing that had been wrong.
+    this.notice(`the door promised ${this.misled.tier} - it lied`, '#fb923c')
   }
 
   // The line above the toast. Only one at a time - a later notice replaces an earlier one,

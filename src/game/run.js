@@ -10,7 +10,7 @@
 // straight back - which is why every fresh-run restart passes `{}` explicitly.
 
 import { CORRIDOR_FLOOR_DOORS, rollCorridorDoors } from './corridor.js'
-import { ENTRANCE_DOOR, isLie, rollLieCap, roomPlanFor } from './doors.js'
+import { ENTRANCE_PLAN, isLie, rollLieCap } from './doors.js'
 import { createInventory } from './inventory.js'
 
 // The run's own state, everything that survives a door and nothing that survives a death.
@@ -61,7 +61,7 @@ export function recordDoorOutcome(gameState, advertised, actual) {
 // Unpack a restart payload into the room to build. `health: null` means "as much as this
 // inventory allows", which only the scene can work out once stats are computed.
 export function roomFor(data) {
-  const plan = data?.plan ?? roomPlanFor(ENTRANCE_DOOR)
+  const plan = data?.plan ?? ENTRANCE_PLAN
 
   return {
     plan,
