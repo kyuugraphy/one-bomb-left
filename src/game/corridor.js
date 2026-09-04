@@ -1,3 +1,6 @@
+import { reachesEveryOpenCell } from './obstacles.js'
+import { solidGrid } from './shapeRoom.js'
+
 // Corridor rooms: long, narrow, straight through. Pure data like shapes.js, but generated
 // rather than hand-authored - a corridor has no silhouette worth drawing by hand, only a
 // direction and a length, so a mask that would be sixty lines of hashes is rolled instead.
@@ -44,4 +47,84 @@ export function generateCorridorRoom(randomFn) {
     orientation,
     mask: Array.from({ length: rows }, () => '#'.repeat(cols))
   }
+}
+
+// How much of a corridor's walkable floor goes to obstacles. Well under a base room's
+// third: a corridor is three cells wide and there is nowhere to go round, so clutter that
+// reads as texture in an open room reads as a blockage here.
+export const CORRIDOR_COVERAGE_MIN = 0.1
+export const CORRIDOR_COVERAGE_MAX = 0.15
+
+// The rock/pit split the base rooms already use.
+const ROCK_SHARE = 0.6
+
+// Obstacles for a corridor, placed **uniformly** across its walkable cells.
+//
+// It does not reuse generateObstacles, for two reasons. Its seeding drops two thirds of
+// every shape into a 3-cell band hugging the wall - and a corridor is 3 cells wide, so the
+// whole width is that band and the bias buys nothing but clustering. And it grows rocks
+// into clumps of up to 8 cells and pits into noodles of up to 12, either of which spans a
+// 3-wide corridor end to end; almost every candidate would be rejected for cutting the
+// room in half. Corridor obstacles are single cells, tagged rock or pit at the same 0.6
+// split, scattered at random.
+//
+// What it does share is the connectivity check: reachesEveryOpenCell, the same flood fill
+// base rooms use. A candidate that cuts the corridor is dropped and another cell is tried,
+// the same way generateObstacles rejects a shape rather than the whole layout.
+//
+// The two ends are protected as well as the middle. A corridor whose end column happened
+// to fill up would still pass a plain connectivity check - every remaining open cell is
+// reachable from every other - while being walled off exactly where its door goes.
+export function generateCorridorObstacles(shape, randomFn) {
+  const solid = solidGrid(shape)
+  const blocked = solid.map((line) => [...line])
+  const open = []
+
+  solid.forEach((line, row) =>
+    line.forEach((isSolid, col) => {
+      if (!isSolid) {
+        open.push([row, col])
+      }
+    })
+  )
+
+  const along = shape.orientation === 'horizontal' ? 1 : 0
+  const ends = open.map((cell) => cell[along])
+  const first = Math.min(...ends)
+  const last = Math.max(...ends)
+  const endIsOpen = (end) =>
+    open.some(([row, col]) => (along === 1 ? col : row) === end && !blocked[row][col])
+
+  const rolled =
+    CORRIDOR_COVERAGE_MIN + randomFn() * (CORRIDOR_COVERAGE_MAX - CORRIDOR_COVERAGE_MIN)
+  // Rounded rather than floored: a 36-cell corridor cannot land on a tenth exactly, and
+  // flooring would put its coverage under the floor of the band rather than beside it.
+  const target = Math.round(open.length * rolled)
+
+  const candidates = [...open]
+  const shapes = []
+  let rejected = 0
+
+  while (shapes.length < target && candidates.length > 0) {
+    const [cell] = candidates.splice(Math.floor(randomFn() * candidates.length), 1)
+    const [row, col] = cell
+
+    blocked[row][col] = true
+
+    // Flooding from whatever is still open rather than from a fixed cell: a fixed one
+    // could never be built on, which is a bias of its own on a floor this small.
+    const start = open.find(([atRow, atCol]) => !blocked[atRow][atCol])
+    const stillWalkable =
+      start && endIsOpen(first) && endIsOpen(last) && reachesEveryOpenCell(blocked, start)
+
+    if (!stillWalkable) {
+      blocked[row][col] = false
+      rejected += 1
+      continue
+    }
+
+    shapes.push({ cells: [cell], asRock: randomFn() < ROCK_SHARE })
+  }
+
+  return { blocked, shapes, coverage: shapes.length / open.length, rejected }
 }

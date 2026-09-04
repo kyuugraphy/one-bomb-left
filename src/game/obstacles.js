@@ -169,23 +169,27 @@ function growNoodle(room, randomFn, cap) {
   return cells.length >= PIT_MIN_CELLS ? cells : null
 }
 
-// Flood fill from the doorway: if any open cell would be cut off, drop the shape.
-function keepsRoomWalkable(room, shape) {
-  shape.forEach(([row, col]) => {
-    room.blocked[row][col] = true
-  })
-
+// Walk out from one open cell and see whether every other open cell is reachable on foot.
+// The 1..n-2 box is the ring convention the whole grid uses: the border is always wall.
+//
+// Pulled out of keepsRoomWalkable so a corridor can use the same check - corridors place
+// obstacles by their own rule, but "did that cut the room in half" is the same question
+// wherever it is asked, and two copies of a flood fill is one too many.
+export function reachesEveryOpenCell(blocked, from) {
+  const rows = blocked.length
+  const cols = blocked[0].length
   let open = 0
-  for (let row = 1; row < room.rows - 1; row++) {
-    for (let col = 1; col < room.cols - 1; col++) {
-      if (!room.blocked[row][col]) {
+
+  for (let row = 1; row < rows - 1; row++) {
+    for (let col = 1; col < cols - 1; col++) {
+      if (!blocked[row][col]) {
         open += 1
       }
     }
   }
 
-  const seen = new Set([room.doorwayCell.join(',')])
-  const queue = [room.doorwayCell]
+  const seen = new Set([from.join(',')])
+  const queue = [from]
   let reached = 0
 
   while (queue.length) {
@@ -200,9 +204,9 @@ function keepsRoomWalkable(room, shape) {
         seen.has(key) ||
         next[0] < 1 ||
         next[1] < 1 ||
-        next[0] > room.rows - 2 ||
-        next[1] > room.cols - 2 ||
-        room.blocked[next[0]][next[1]]
+        next[0] > rows - 2 ||
+        next[1] > cols - 2 ||
+        blocked[next[0]][next[1]]
       ) {
         return
       }
@@ -212,11 +216,22 @@ function keepsRoomWalkable(room, shape) {
     })
   }
 
+  return reached === open
+}
+
+// Flood fill from the doorway: if any open cell would be cut off, drop the shape.
+function keepsRoomWalkable(room, shape) {
+  shape.forEach(([row, col]) => {
+    room.blocked[row][col] = true
+  })
+
+  const walkable = reachesEveryOpenCell(room.blocked, room.doorwayCell)
+
   shape.forEach(([row, col]) => {
     room.blocked[row][col] = false
   })
 
-  return reached === open
+  return walkable
 }
 
 // The cells a plain rectangular room starts out solid in: its border ring.
