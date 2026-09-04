@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { DOOR_INSET, doorCells, innerCell, solidGrid, wallCells, wallRun } from './shapeRoom.js'
 import { doorCapacity } from './shapes.js'
 import {
-  CORRIDORS_PER_FLOOR_MAX,
-  CORRIDORS_PER_FLOOR_MIN,
   CORRIDOR_COVERAGE_MAX,
   CORRIDOR_COVERAGE_MIN,
   CORRIDOR_FLOOR_DOORS,
@@ -13,6 +11,7 @@ import {
   CORRIDOR_WALL_RING,
   generateCorridorObstacles,
   generateCorridorRoom,
+  corridorsForFloor,
   rollCorridorDoors
 } from './corridor.js'
 
@@ -732,26 +731,73 @@ const averageGap = (doorCount, runs = 4000) => {
   return total / seen
 }
 
+describe('corridorsForFloor', () => {
+  it('gives floor 1 one to three', () => {
+    expect(corridorsForFloor(7)).toMatchObject({ min: 1, max: 3 })
+    expect(corridorsForFloor(5)).toMatchObject({ min: 1, max: 3 })
+  })
+
+  it('gives a floor-2 sized floor one to four', () => {
+    expect(corridorsForFloor(8)).toMatchObject({ min: 1, max: 4 })
+    expect(corridorsForFloor(11)).toMatchObject({ min: 1, max: 4 })
+  })
+
+  it('gives the long floors two to five', () => {
+    expect(corridorsForFloor(12)).toMatchObject({ min: 2, max: 5 })
+    expect(corridorsForFloor(15)).toMatchObject({ min: 2, max: 5 })
+    expect(corridorsForFloor(30)).toMatchObject({ min: 2, max: 5 })
+  })
+
+  // The band edges are where an off-by-one hides, and the bands are meant to line up with
+  // the floor sizes: 7 is floor 1's whole count, 8 opens floor 2's range, 12 opens the rest.
+  it('steps up at 8 and again at 12, not either side of them', () => {
+    expect(corridorsForFloor(7).max).toBe(3)
+    expect(corridorsForFloor(8).max).toBe(4)
+    expect(corridorsForFloor(11).max).toBe(4)
+    expect(corridorsForFloor(12).max).toBe(5)
+  })
+
+  it('never asks for more corridors than a floor could hold apart', () => {
+    for (let doorCount = 1; doorCount <= 40; doorCount++) {
+      expect(corridorsForFloor(doorCount).min).toBeLessThanOrEqual(Math.ceil(doorCount / 2))
+    }
+  })
+})
+
 describe('rollCorridorDoors', () => {
   const FLOOR = CORRIDOR_FLOOR_DOORS
 
-  it('deals between one and three corridors to a floor', () => {
-    for (let i = 0; i < 2000; i++) {
-      const doors = rollCorridorDoors(FLOOR, Math.random)
+  // How many a floor gets is banded by its size, so a long floor is not left with the
+  // same one-to-three a short one gets and a corridor every seven rooms.
+  it('deals a count inside its own floor band', () => {
+    ;[5, 7, 8, 10, 11, 12, 15, 20].forEach((doorCount) => {
+      const band = corridorsForFloor(doorCount)
 
-      expect(doors.length).toBeGreaterThanOrEqual(CORRIDORS_PER_FLOOR_MIN)
-      expect(doors.length).toBeLessThanOrEqual(CORRIDORS_PER_FLOOR_MAX)
-    }
+      for (let i = 0; i < 400; i++) {
+        const doors = rollCorridorDoors(doorCount, Math.random)
+
+        expect(doors.length, `${doorCount} rooms`).toBeGreaterThanOrEqual(band.min)
+        expect(doors.length, `${doorCount} rooms`).toBeLessThanOrEqual(band.max)
+      }
+    })
   })
 
-  it('deals all three counts, not one fixed number', () => {
-    const counts = new Set()
+  it('deals every count its band allows, not one fixed number', () => {
+    ;[7, 10, 15].forEach((doorCount) => {
+      const band = corridorsForFloor(doorCount)
+      const counts = new Set()
 
-    for (let i = 0; i < 2000; i++) {
-      counts.add(rollCorridorDoors(FLOOR, Math.random).length)
-    }
+      for (let i = 0; i < 4000; i++) {
+        counts.add(rollCorridorDoors(doorCount, Math.random).length)
+      }
 
-    expect([...counts].sort()).toEqual([1, 2, 3])
+      const wanted = []
+      for (let n = band.min; n <= band.max; n++) {
+        wanted.push(n)
+      }
+
+      expect([...counts].sort((a, b) => a - b), `${doorCount} rooms`).toEqual(wanted)
+    })
   })
 
   it('picks door-takings that exist', () => {
@@ -783,29 +829,55 @@ describe('rollCorridorDoors', () => {
     }
   })
 
-  // The "one every two or three rooms" target, checked on the floor it was written for.
-  // Floor 1 is 7 rooms, and there the mean gap comes out at 2.8.
-  it('keeps them roughly one every two or three rooms on a floor-1 sized floor', () => {
-    const meanGap = averageGap(7)
+  // The point of banding the count by floor size: the "one every two or three rooms" feel
+  // has to survive a floor twice as long, which a flat one-to-three could not do - it left
+  // a 15-room floor with one corridor every seven and a half rooms.
+  // Measured with the bands in: 2.8 at seven rooms, 3.1 at ten, 3.8 at fifteen. A flat
+  // one-to-three gave 2.8, 3.6 and 5.0, so the long floors are the ones this bought.
+  // Fifteen rooms is a corridor every three or four rather than every two or three - the
+  // bands are steps, and the top one covers everything from twelve rooms up.
+  it('keeps them a few rooms apart in every band', () => {
+    ;[7, 10, 15].forEach((doorCount) => {
+      const meanGap = averageGap(doorCount)
 
-    expect(meanGap).toBeGreaterThan(2)
-    expect(meanGap).toBeLessThan(3.2)
+      expect(meanGap, `${doorCount} rooms`).toBeGreaterThan(2)
+      expect(meanGap, `${doorCount} rooms`).toBeLessThan(4)
+    })
   })
 
-  // On a longer floor they necessarily spread: the count stays 1-3 however many rooms
-  // there are, so a 15-room floor is one corridor every 7 or 8 rooms rather than every 3.
-  // That is what "1-3 per floor" means at that size, not a bug - but it is worth a test
-  // saying so, because the two halves of the design only agree at floor-1 length.
-  it('spreads them further apart as a floor gets longer', () => {
-    expect(averageGap(7)).toBeLessThan(averageGap(11))
-    expect(averageGap(11)).toBeLessThan(averageGap(15))
+  // Density is the other half of the same question: rooms per corridor, rather than the
+  // distance between two of them.
+  it('keeps a corridor every few rooms in every band', () => {
+    ;[7, 10, 15].forEach((doorCount) => {
+      let corridors = 0
+      const runs = 4000
+
+      for (let i = 0; i < runs; i++) {
+        corridors += rollCorridorDoors(doorCount, Math.random).length
+      }
+
+      const roomsPerCorridor = doorCount / (corridors / runs)
+
+      expect(roomsPerCorridor, `${doorCount} rooms`).toBeGreaterThan(2)
+      expect(roomsPerCorridor, `${doorCount} rooms`).toBeLessThan(5)
+    })
   })
 
-  it('keeps the gaps sane at the default floor size', () => {
-    const meanGap = averageGap(FLOOR)
+  // Density is the measure the banding was for, and the one that actually moved: rooms per
+  // corridor went from 3.5, 5.0, 7.5 across the three sizes to 3.5, 4.0, 4.3. A long floor
+  // is now within about a room of a short one instead of twice as sparse.
+  it('keeps density roughly flat across the bands', () => {
+    const density = (doorCount, runs = 4000) => {
+      let corridors = 0
 
-    expect(meanGap).toBeGreaterThan(2.5)
-    expect(meanGap).toBeLessThan(4.5)
+      for (let i = 0; i < runs; i++) {
+        corridors += rollCorridorDoors(doorCount, Math.random).length
+      }
+
+      return doorCount / (corridors / runs)
+    }
+
+    expect(density(15) - density(7)).toBeLessThan(1.5)
   })
 
   // A corridor must be able to land anywhere in the floor, not just early: pre-rolling is
@@ -873,10 +945,10 @@ describe('rollCorridorDoors', () => {
   })
 
   it('leaves most of the floor free of them', () => {
-    for (let i = 0; i < 500; i++) {
-      const doors = rollCorridorDoors(CORRIDOR_FLOOR_DOORS, Math.random)
-
-      expect(doors.length).toBeLessThan(CORRIDOR_FLOOR_DOORS / 2)
-    }
+    ;[7, 10, 15].forEach((doorCount) => {
+      for (let i = 0; i < 400; i++) {
+        expect(rollCorridorDoors(doorCount, Math.random).length).toBeLessThan(doorCount / 2)
+      }
+    })
   })
 })

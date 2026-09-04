@@ -165,11 +165,23 @@ export function generateCorridorObstacles(shape, randomFn) {
   return { blocked, shapes, coverage: shapes.length / open.length, rejected }
 }
 
-// How many corridors a floor gets. Rare enough to be a surprise, common enough that a
-// floor usually has one: a corridor is a pause between rooms, and a run made mostly of
-// pauses is a run that has stopped.
-export const CORRIDORS_PER_FLOOR_MIN = 1
-export const CORRIDORS_PER_FLOOR_MAX = 3
+// How many corridors a floor gets, banded by how long the floor is. Rare enough to be a
+// surprise, common enough that a floor usually has one: a corridor is a pause between
+// rooms, and a run made mostly of pauses is a run that has stopped.
+//
+// The count has to grow with the floor or the feel does not survive the length. A flat
+// one-to-three left floor 1 at a corridor every 3.5 rooms and a fifteen-room floor at one
+// every 7.5 - the same numbers spread twice as thin. Steps rather than a formula, lined up
+// with the floor sizes themselves: floor 1 is 7 rooms, floor 2 runs 9-11, the rest to 15.
+export const CORRIDOR_FLOOR_BANDS = [
+  { upTo: 7, min: 1, max: 3 },
+  { upTo: 11, min: 1, max: 4 },
+  { upTo: Infinity, min: 2, max: 5 }
+]
+
+export function corridorsForFloor(doorCount) {
+  return CORRIDOR_FLOOR_BANDS.find((band) => doorCount <= band.upTo)
+}
 
 // A stand-in for the floor's own room count until floor logic exists. Floor 1 is 7 rooms,
 // Floor 2 is 9-11 and the rest run to 15 and beyond, so this is mid-range rather than any
@@ -200,14 +212,12 @@ export function rollCorridorDoors(doorCount, randomFn) {
     return []
   }
 
-  // A floor too short for three spread-out corridors takes what it can hold: alternating
-  // doors is the tightest a no-two-in-a-row rule allows.
+  // A floor too short for its whole band takes what it can hold: alternating doors is the
+  // tightest a no-two-in-a-row rule allows.
   const fits = Math.ceil(doorCount / 2)
-  const spread = CORRIDORS_PER_FLOOR_MAX - CORRIDORS_PER_FLOOR_MIN + 1
-  const count = Math.min(
-    fits,
-    CORRIDORS_PER_FLOOR_MIN + Math.floor(randomFn() * spread)
-  )
+  const band = corridorsForFloor(doorCount)
+  const spread = band.max - band.min + 1
+  const count = Math.max(1, Math.min(fits, band.min + Math.floor(randomFn() * spread)))
 
   const slots = Array.from({ length: doorCount - count + 1 }, (_, slot) => slot)
   const picked = []
