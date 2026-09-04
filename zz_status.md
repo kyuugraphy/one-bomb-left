@@ -4,7 +4,14 @@ _Last updated: 2026-09-04_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-04, second pass) — corridors reach real runs
+## Latest session (2026-09-04, third pass) — room types merged, and the door stops lying
+Two changes, committed separately.
+
+**SAFE and RISKY are one `combat` type.** The split was meant to offer "a small fight for a clean item" against "a big fight for a bargain with a cost", and it never earned that: the clean item was strictly the safer buy, so the cyan door was correct every time and the violet one was what you picked when you were bored. One type, one enemy table, and **the payout rolled on the clear** — 60% a debuff-paired item, 40% a clean one — so the gamble is in what the room gives you rather than in which colour you walked through. Combat wears plain slate, because there is no reward kind left for a colour to name.
+
+**The door lie is gone, replaced by the room twist.** A lie was the *sign* being wrong about a room that was always going to be what it was. A twist is the sign being right and the room changing its mind: a shop or a puzzle turns out to be a hard combat room, hidden completely, announced with **AMBUSH** and the project's first sound. Nothing the player read was false, so nothing they learned is worth unlearning.
+
+## Previous session (2026-09-04, second pass) — corridors reach real runs
 A corridor is no longer debug-only. **1-5 of them per floor, banded by how long the floor is**, pre-rolled at the start of the run and spliced in behind an ordinary door. The telegraph never mentions one: the door you took still names the room you are walking toward, and the corridor sits in front of it. It costs a door but not a room number, so a floor's room total is what it was.
 
 Its exit is **a real pad that says nothing** — the same 48 px square as any other door, plain slate, no reward colour, no tier glow, no pulse, no label. It was an invisible trigger for one build, which is what the spec asked for and what it should not have asked for: an exit you cannot see is a wall you happen to pass through.
@@ -130,8 +137,8 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
 | `currency.js` | `addExp`, `spendExp` | `exp` |
 | `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `shelfLabelFor`, `rollShopStock` | none - rolls, prices, what may be sold, and what the shelf gives away |
-| `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP` | none - rolls whether a kill leaves half a heart |
-| `doors.js` | `rollDoorCount`, `rollDoors`, `resolveDoor`, `rollLieCap`, `isLie`, `mustBeHonest`, `MAX_LIE_CAP`, `roomPlanFor`, `ENTRANCE_DOOR`, `DOOR_STYLE`, `TIER_GLOW`, accuracy constants | none - rolls the telegraph and the room plan behind it |
+| `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP`, `rollRoomDrop`, `DEBUFF_DROP_SHARE`, `DEBUFF_DROP`, `CLEAN_DROP` | none - rolls whether a kill leaves half a heart, and what clearing a room pays |
+| `doors.js` | `rollDoorCount`, `rollDoors`, `roomPlanFor`, `REWARD_TYPES`, `TYPE_WEIGHTS`, `ENTRANCE_DOOR`, `ENTRANCE_PLAN`, `DOOR_STYLE`, `TIER_GLOW`, `rollTwist`, `rollTwistCap`, `mustStaySafe`, `canTwist`, `TWIST_CHANCE`, `TWISTED_PLAN` | none - rolls the telegraph, the room plan behind it, and whether that room twists |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `reachesEveryOpenCell`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
 | `run.js` | `freshGameState`, `roomFor`, `recordDoorOutcome` | owns `gameState`'s shape; turns a restart payload into the room to build; books what a taken door turned out to be |
@@ -233,9 +240,9 @@ An already-owned reward **costs nothing**: `takeReward` short-circuits before to
 
 **What happened to the old kind constants:** `DROP_KINDS` is **removed**. There is one kind now, so a list of them was a concept with nothing in it; a single `HEAL_DROP` constant replaces it so the scene and the module cannot drift on the spelling. The `'treasure'` and `'reward'` strings survive only as `pickup.spec.kind` values inside `PlayScene`, which is where they always did the real work.
 
-**`spawnTreasurePickup` and `spawnRewardPickup` are deliberately left in place and are currently unreferenced.** They are the rendering half, unchanged by any of this, and the room-clear payout will call them as they stand. They are flagged in a comment above `spawnHealPickup` — delete them if room-clear lands differently.
+**`spawnTreasurePickup` and `spawnRewardPickup` were deliberately left in place, unreferenced, for the room-clear payout to call.** It landed differently: the payout is `spawnCleanPickup` and `spawnDebuffPickup`, chosen by `rollRoomDrop`.
 
-`roomPlan.treasure` went with it — nothing read the field once room-start treasure was gone, so `ROOM_PLANS` and `roomPlanFor` dropped it. SAFE and RISKY doors are now told apart by enemy count and `cursedChance` alone.
+`roomPlan.treasure` went with it — nothing read the field once room-start treasure was gone, so `ROOM_PLANS` and `roomPlanFor` dropped it. (SAFE and RISKY were then told apart by enemy count and `cursedChance`; both the split and `cursedChance` are gone now.)
 - Touching a pickup takes it. With no take/skip UI yet, **the only way to skip a cursed reward is to walk around it** — that is what the purple tint is for.
 - **Full rack raises the swap prompt** rather than auto-adding or eating the item; see the Inventory UI section.
 - **Keys `1` / `2` / `3` fire active slots 1-3.** WASD moves and the arrows aim, so the number row is what scales to three slots — and it leaves `SPACE` free for the bomb button.
@@ -243,26 +250,23 @@ An already-owned reward **costs nothing**: `takeReward` short-circuits before to
 - The health bar is **rebuilt**, not resized, when Iron Plating changes `maxHp` — 6 segments → 7, and the extra max HP is handed over as real HP.
 
 ### Door choice (`doors.js` + `PlayScene.js`) — replaced room alternation
-**A cleared room offers 2-3 doors along the top wall, and the choice is the run.** Each door advertises two things independently: a **reward type** by colour and a **difficulty tier** by glow. It is usually telling the truth.
+**A cleared room offers 2-3 doors along the top wall, and the choice is the run.** Each door says two things: which **kind of room** is behind it by colour, and how hard it will be by glow. Both are true.
 
-| door | colour | what is actually behind it |
+> **This section drifted and has been corrected.** It described `cursedChance`, a red COMBAT door and a SAFE/RISKY split, none of which had existed for two sessions — the curse system went in the sixth pass and the types merged in the third pass of 2026-09-04. The living detail is in **Door types: COMBAT, SHOP, PUZZLE** and **The room twist** further down; what is kept here is only what those do not cover.
+
+| door | colour | what is behind it |
 |---|---|---|
+| **COMBAT** | slate `0xcbd5e1` | the ordinary room. Enemies by tier (4/6/9), and one item on the clear |
 | **SHOP** | gold `0xfbbf24` | the shop room. The tier is the **guard**, not the stock: easy 0, medium 2, hard 3 |
-| **SAFE** | cyan `0x67e8f9` | few enemies (1/2/3), **`cursedChance` 0** — the door you take to bank what you are carrying rather than to be handed anything |
-| **RISKY** | purple `0xc084fc` | more enemies (2/4/6) and **`cursedChance` 0.9** — nearly every reward drop carries a curse |
-| **COMBAT** | red `0xef4444` | the ordinary 0.5 coin-flip curse, but a **packed room** (4/6/9). Every kill is 2 EXP and a one-in-ten shot at a drop, so this is the farm door, not the handout door |
+| **PUZZLE** | pink `0xf472b6` | a stub — no enemies, no clutter, no payout, doors open on entry |
 
-**Tier does two things at once**: more enemies (the counts above, per easy/medium/hard) and tougher ones — `enemyStrengthBonus` of 0/1/2 rides **on top of** the run's own `enemyStrength`, so a hard room is hard *in addition to* however many 'enemy' curses have been collected. Measured: a hard room's enemies at 12 HP against a base 10.
+**Tier does two things at once**: more enemies (the counts above, per easy/medium/hard) and tougher ones — `enemyStrengthBonus` of 0/1/2. It was once stacked on top of a run-wide `enemyStrength` that the curse system fed; that is gone, so the tier bonus is now the only thing that toughens an enemy. Measured: a hard room's enemies at 12 HP against a base 10.
 
-**The lie is the point.** `TYPE_ACCURACY = 0.9`, `TIER_ACCURACY = 0.9`. A door that always tells the truth is a menu, not a gamble; one that lies too often teaches the player to ignore the colour, which costs the telegraph its meaning. A miss picks from the *other* options only — substituting the advertised value back in would quietly raise the real accuracy above the stated one. The two channels are independent, so they **compound**: they were 0.85/0.8 to start with, which read as "honest most of the time" per channel but left a door honest about *both* only 68% of the time — a third of doors misleading on something, well past the 10-20% surprise intended. Both are 0.9 now, so the combined honesty is the target 0.81. **Measured over 50 000 resolved doors: type honest 90.0%, tier honest 90.1%, honest about both 81.0%.**
+**The room is settled when the doors are built, not on the walk-in**, so nothing can be re-rolled by hovering. Walking into a door **destroys the others in the same frame** and restarts the scene with `{ plan, carried }`; `roomPlanFor` turns the tag into generation parameters and `init` hangs them on `this.roomPlan`. Nothing below that line knows which tag it came from — enemy count and enemy toughness are read off the plan. A toast on entry names what the room is.
 
-**Types are drawn without replacement** (two gold doors would be one choice offered twice); tiers are rolled per door and may repeat, so "the safe one is also the hard one" is a hand the player can be dealt. Measured spread over 50 k doors: 25.0 / 24.8 / 25.2 / 25.0 %.
+**Doors are placed like the shop shelf** — evenly spaced across the top with a `DOOR_MARGIN` of `WALL_THICKNESS + 90`, each snapped by `nearestFreePoint` to the nearest cell the player can stand on, so a door never opens inside a rock. `pickExitSpot` became that general helper. See **Where a door pad goes, and when it works** for the snap limit and the arming rule that came later.
 
-**The truth is rolled when the doors are built, not on the walk-in** (`resolveDoor` inside `openDoors`), so the room is settled before the player touches anything — no re-rolling by hovering. Walking into one **destroys the others in the same frame** and restarts the scene with `{ plan, carried }`; `roomPlanFor` turns the resolved tag into generation parameters and `init` hangs them on `this.roomPlan`. Nothing below that line knows which tag it came from — enemy count, enemy toughness and curse odds are all read off the plan. A toast on entry names what the room **actually** turned out to be, which is the only way the player learns whether the door was honest.
-
-**Doors are placed like the shop shelf** — evenly spaced across the top with a `DOOR_MARGIN` of `WALL_THICKNESS + 90`, each snapped by `nearestFreePoint` to the nearest cell the player can stand on, so a door never opens inside a rock. `pickExitSpot` became that general helper.
-
-**The entrance room is spelled out, not rolled** (`ENTRANCE_DOOR = safe_reward/easy`): one enemy, nothing cursed. No door chose it.
+**The entrance room is spelled out, not rolled.** `ENTRANCE_DOOR` is `combat`/`easy` and `ENTRANCE_PLAN` overrides its count to **one** enemy. No door chose it.
 
 **Both temporary scaffolds retired with this.** The `P` debug shop key is gone — doors lead to shops now, which was its stated exit condition — and the 5-enemies-on-entry hack is replaced by the plan's own count. `rollShopHasEnemies` (and its 50/50 `ENEMY_CHANCE`) went with them: the door's tier decides whether a shop is guarded, so a coin flip behind the player's back would only contradict the glow they just read.
 
@@ -527,7 +531,7 @@ The test's end-to-end flood fill moved with it: **"end to end" means door pad to
 
 **`doorsTaken` is a second counter beside `roomNumber`**, and the two drift apart by exactly the number of corridors walked. That is the whole of "a corridor does not count as a room": `roomNumber` drives the big-room band and the depth display and is not touched, while `doorsTaken` indexes the pre-rolled list.
 
-**The destination is held, not re-rolled.** `takeDoor` resolves the door as it always did — plan, lie, shape — and then, if a corridor is due, restarts into the corridor with that whole resolved destination parked in `pending`. `leaveCorridor` restarts into it on contact. So the corridor cannot change what is on the other side, and the misled toast still fires in the room the door lied about rather than in the hallway before it.
+**The destination is held, not re-rolled.** `takeDoor` resolves the door as it always did — plan, twist, shape — and then, if a corridor is due, restarts into the corridor with that whole resolved destination parked in `pending`. `leaveCorridor` restarts into it on contact. So the corridor cannot change what is on the other side, and an ambush announces itself in the room that twisted rather than in the hallway before it.
 
 **The room-clear gate applies to a corridor too:** its two enemies have to die before the exit opens. A corridor with a way out you can walk straight past is a long empty hallway.
 
@@ -572,22 +576,35 @@ The four shapes were picked for **needing no base rotation**, so the pickup reve
 
 Verified: 0 name or effect labels on the ground before pickup; stats untouched and no name for every frame of the beat; the effect and the name landing on the same frame at the end; a shop shelf reading `PASSIVE  ?` / `10 EXP` with the refills still named; a refill buying instantly with no beat; and a purchase confirmation surviving the room clearing underneath it.
 
-### The lie budget
-A door still advertises a reward type by colour and a difficulty by glow, and still rolls `TYPE_ACCURACY` / `TIER_ACCURACY` at 0.9 each — but those rolls are now fenced by two rules that belong to the **run** rather than to the door.
+### The room twist (replaced the door lie)
+**A door never lies now.** It says what kind of room is behind it and how hard that room will be, and both are true. `TYPE_ACCURACY`, `TIER_ACCURACY`, `otherThan`, `resolveDoor`, `isLie`, `mustBeHonest`, `rollLieCap` and the three lie fields on `gameState` are all **deleted**, not renamed — and `buildDoor` lost its `actual` argument, because a door and what is behind it can no longer differ.
 
-**A run is dealt a lie budget of 0 to 4** by `rollLieCap`, once, when it starts. Past it `resolveDoor` skips the accuracy rolls entirely and hands back exactly what was advertised. Per-door odds alone meant a long run always got lied to eventually and a short one usually did not, which made the telegraph feel like weather. A budget makes it a hand you were dealt: some runs are honest the whole way through, and the player cannot know which run they are in until it is over — which is what makes reading a door worth doing.
+The reason for removing rather than tuning: a telegraph that misreports is one the player learns to ignore, and an ignored telegraph is three coloured squares with no game in them. That pressure got worse with the merge, not better — once colour named a room type rather than a reward, an amber door that opened onto a fight was not a gamble the player could price, it was the amber door meaning nothing.
 
-**Two lies never land back to back.** If the door the player last walked through lied, the next resolution is forced honest whatever the roll says. One surprise is a gamble; two in a row reads as a rigged game. A forced-honest door is not a lie, so it costs nothing from the budget and clears the flag — the door after it may lie again.
+**What replaces it moves the surprise from the sign to the room.** A shop or a puzzle has a 1% chance of turning out to be a hard combat room. Nothing at the door hints at it: the pad is the ordinary amber or pink, the glow is the tier the room would have had, and there is no fourth colour and no extra mark. A twisted room is an ordinary hard combat room in every respect — same enemies, same 60/40 clear payout.
 
-`mustBeHonest({ lieCap, liesSoFar, lastDoorWasLie })` is the whole gate, and `isLie(advertised, actual)` is what counts: **either channel missing is one lie, not two**, because the player walks into one room and gets one surprise out of it.
+**Combat rooms are never twisted.** A fight that becomes a fight is not a surprise, and the entrance is a combat room, so without this a run could open on an ambush.
 
-**The budget is charged on the door taken, not on the doors resolved.** A room offers two or three and every one of them resolves when the doors open — but the player only ever finds out about the one they walked through, so charging for the others would spend the budget on lies nobody was told. `recordDoorOutcome` runs in `takeDoor`. Resolution still happens at open time, so the room the player picked is settled before they touch it, exactly as before.
+**The fairness structure was kept and retargeted, not reinvented.** A run is dealt 0-4 twists by `rollTwistCap`, and two twists never land back to back — the same two rules the lie budget had, for the same reason: some runs never twist at all, and the player cannot know which run they are in until it is over.
 
-**Where the state lives, and why:** `gameState`. It is passed to every room by reference through the door payload, so `liesSoFar` and `lastDoorWasLie` survive a room change without any extra plumbing; and it is rebuilt by `freshGameState()` on death and on the pause menu's Exit, so a new run is dealt a new cap and a clean slate. Nothing else in the game has that lifetime. `freshGameState(randomFn = Math.random)` takes an injected RNG so a test can pin the cap.
+**`recordTwist` takes the plan**, and that is the rule rather than an implementation detail: a room that could never have twisted leaves the block alone. Twist a puzzle, walk a fight, and the next shop is still a real shop. Had a combat room cleared the flag the rule would almost never fire, since combat is well over half of all doors.
 
-**Being told.** `announceMisled()` puts an orange line above the ordinary room toast: `the door promised SAFE easy - it lied`. It gets its own text object and is called **before `populateRoom` branches**, both for reasons found by measuring rather than by reading: a shop returns from `populateRoom` before `announceRoom` is ever reached, so a lie that dropped the player in a shop was silent; and a room with nothing in it clears on its first frame, so the "room clear - N doors" toast overwrote the announcement before it could be read. Between them **two thirds of all lies went unannounced** in the first cut of this.
+**Resolved at the door, not on arrival.** `rollTwist` runs in `takeDoor` beside the plan and the shape, so a room is settled before the scene starts and the roll stays in the tested layer rather than in `PlayScene`. The shape is rolled off the **pre-twist** plan, so a twisted shop is still the rectangle the player thought they were walking into.
 
-Verified over **25 runs and 300 doors taken**: 36 lies, 12% per door (was ~19% on the flat roll); **0 runs exceeded their cap**, **0 consecutive lies**, **0 lies without a message**, **0 messages on an honest door**, and all five caps 0-4 were dealt. A worked example, cap 2: lied on doors 2 and 8, then told the truth for the remaining six.
+**Being told.** `announceTwist()` puts a red line above the ordinary room toast — `AMBUSH - the shop was a trap` — over a camera shake and a sting. It keeps the `notice` slot and the before-`populateRoom` call site the lied line had, both of which were found by measuring: a shop returns from `populateRoom` before `announceRoom` is reached, and a room with nothing in it clears on its first frame and overwrites the line with "room clear".
+
+**The sting is the project's first sound, and it carries no asset.** Two detuned sawtooths sliding down an octave through a closing lowpass, built from oscillators at the moment it plays. Synthesised because there is no audio pipeline here at all — no files, no preload, no Phaser sound manager — and introducing one for a single sound would be a bigger change than the mechanic it announces. Wrapped in a try/catch, because audio can fail for reasons outside the game and a missing sound must not take the ambush down with it. Verified by splicing an analyser in front of the destination: **peak amplitude 0.085**, so it is real output rather than silence.
+
+**Measured over 5,000,000 rooms:**
+
+| | |
+|---|---|
+| twistable rooms (shop/puzzle) | 43.6% |
+| rooms that twisted | 0.344% |
+| runs with at least one twist | 3.4% — one run in 29 |
+| runs with two | 0.027% |
+
+**The no-consecutive rule fired 118 times in 5,000,000 rooms.** It is correct and tested, but at 1% it is insurance against a future tuning change rather than something the game does. The cap does slightly more (0.088%), almost all of it the 1-in-5 runs dealt `twistCap: 0`, which is why the observed per-twistable-room rate is 0.789% rather than the nominal 1%.
 
 ### Where a door pad goes, and when it works
 Two rules, and the second is the one that makes the guarantee.
@@ -607,27 +624,42 @@ Two rules, and the second is the one that makes the guarantee.
 The puzzle room took a door after 138 frames — 2.3 s of deliberately walking into one, which is the point of a door. A wider sweep of all three types across all five room shapes: **15 of 15 clears offered 2-3 doors and none transitioned**, closest pad 661 px from the player. Re-running the measurement that found the bug: **0 of 153 pads in the play area, worst y = 140** (was 588).
 
 ### Room-clear payouts
-Clearing a room pays exactly one item, decided by the door that led there rather than rolled:
+Clearing a combat room pays exactly one item, and **which kind is rolled** rather than read off the door:
 
-| door | on clear |
+| room | on clear |
 |---|---|
-| SAFE | one item from every non-debuff source, never cursed |
-| RISKY | one item from the debuff pool |
+| COMBAT | 60% one debuff-paired item, 40% one clean item |
 | SHOP | nothing — it already sold you something |
 | PUZZLE | nothing — it is a stub |
+| corridor | nothing — it is the bit between rooms |
 
-The safe payout pools **treasure and reward together**. Treasure lost its only source when kills stopped dropping items, and from the player's side the distinction that matters is "curse-free", not which internal list it came off. It is still weighted, so a passive already stacked twice comes up at a quarter of the odds of one never seen.
+It used to be a lookup: a safe room always paid clean, a risky one always paid a debuff, so the payout was settled the moment the player picked a colour. With safe and risky merged there is no colour to read it off, and paying the same thing every time would leave clearing a room worth nothing in particular. `rollRoomDrop` lives in `drops.js` beside the enemy drop table; `payOutRoom` gates on `roomType === 'combat'`. Measured **59.9 / 40.1 over 2,000 real clears** through the scene.
+
+The clean payout pools **treasure and reward together**. Treasure lost its only source when kills stopped dropping items, and from the player's side the distinction that matters is "curse-free", not which internal list it came off. It is still weighted, so a passive already stacked twice comes up at a quarter of the odds of one never seen.
 
 `payOutRoom()` runs from `checkRoomCleared` just before `openDoors`, which is what stops it coming round twice. The pickup lands at `freeSpotNear(player)` rather than at a fixed point, so in a 2240 px big room it is not left across the map.
 
-### Door types: SHOP, SAFE, RISKY, PUZZLE
-**COMBAT is removed.** Safe and risky already answered "how big a fight is this", so a third combat door was a difficulty dial wearing a reward door's clothes. Its enemy counts (4/6/9) moved onto **RISKY**, which is now the heavy fight as well as the one that pays in debuffs.
+### Door types: COMBAT, SHOP, PUZZLE
+**SAFE and RISKY are one `combat` type**, and both old names are gone rather than aliased, so a stale caller breaks loudly instead of working by accident. `type` and `roomType` are now the same word for a fight, which is one name for one thing.
 
-**PUZZLE is a stub** and deliberately looks like one: `roomType: 'puzzle'`, zero enemies at every tier, no rolled clutter, no payout for clearing it. Its doors open the moment you walk in. The telegraph treats it like any other type — it lies about type and tier at the same 90%/90%, so a door claiming PUZZLE can still be a fight.
+**Combat keeps the old risky counts, 4/6/9** — not averaged with the safe table it absorbed, because the safe counts (1/2/3) existed to be the fight you took when you did not want a fight, and that is not a choice on offer any more. **An explicit placeholder:** a real enemy pool with ranks is planned, and when it lands it replaces this one entry of `ROOM_PLANS` and nothing else.
 
-**Pink, `0xf472b6`.** The four have to be told apart at a glance, and pink is the furthest unused hue from the violet RISKY door — the pair that would otherwise be easiest to confuse (55 degrees apart, against 27 for the green-vs-cyan alternative). Red is free again with COMBAT gone, but red is what damage and enemies are painted in everywhere else, so it stays out of the door vocabulary.
+**The entrance is exempt.** `ENTRANCE_PLAN` holds **one** enemy. The entrance was a `safe_reward`/easy room and the merge would have handed it the risky table's four — fallout rather than a decision, and a run should open with something to shoot at rather than with a fight. Spelled out rather than looked up, exactly as `CORRIDOR_PLAN` is and for the same reason: no door chose either of them. A fourth tier or an is-this-the-entrance flag would have put a branch in the path of every ordinary combat room to serve one room in the game; this way `roomPlanFor` is untouched and **every other easy combat room still holds four**.
 
-Sampled 5,000 rolls: all four types come up about evenly (3,072-3,182 each), the 2-3 door split is unchanged, and `combat_heavy` never appears.
+**Combat draws at double weight** (`TYPE_WEIGHTS`), and shop and puzzle leave the pool once drawn so neither can appear twice. Combat may fill any number of slots — the old no-repeat rule was right for four types and wrong for three, where it would make every three-door room exactly one of each. Uniform it came out at 44% of doors with **one room in six offering no fight at all**, so "skip the fight" was a strategy the draw handed out for free. Weighted, over 200,000 rooms:
+
+| | uniform | weighted 2:1:1 |
+|---|---|---|
+| combat | 44.1% of doors | **57.0%** |
+| shop | 27.9% | 21.5% |
+| puzzle | 28.0% | 21.5% |
+| rooms with no combat door | 16.8% | **8.4%** |
+
+8.4% is where the old four-type draw had it. A room offering only a shop and a puzzle is still a real hand, just an uncommon one.
+
+**Colour stopped naming a reward**, because there is no reward kind left to name. It is a label now rather than a signal — always true, so reading it is free — and **glow is the only channel carrying anything at stake**. Combat is **slate `0xcbd5e1`**: amber and pink mean something specific and rare, and the ordinary room should not compete with them for the eye. It is the same grey the corridor exit wears, which is the same idea twice; the two are still told apart, because a combat door pulses with its tier and a corridor exit does not. Violet and cyan are free and left free.
+
+**PUZZLE is a stub** and deliberately looks like one: `roomType: 'puzzle'`, zero enemies at every tier, no rolled clutter, no payout for clearing it. Its doors open the moment you walk in. Pink, `0xf472b6`. Red stays out of the door vocabulary as it always has — it is what damage and enemies are painted in.
 
 ### What a shelf gives away
 The shelf shows the item's **icon** and its **price**, and nothing else. `shelfLabelFor` returns the empty string for a catalogue item — its icon is already saying which item it is, so a word above the price would be repeating the picture — and the refill's own name for a refill, which is not an item and has nothing to find out about.
@@ -716,6 +748,10 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
+- **A twist is so rare you will not meet one by playing.** 0.344% of rooms, one run in 29, and two in a run about once in 3,700. The mechanic is built, tested and verified in the browser, but playtesting will not show it to you — raise `TWIST_CHANCE` while evaluating it, or force one. Whether 1% is the right number is untested by anything but arithmetic.
+- **The twist's fairness rules barely fire at 1%.** The no-consecutive rule blocked 118 twists in 5,000,000 rooms and the cap 4,411, nearly all of the latter from `twistCap: 0` runs. They are insurance against the rate going up rather than something the game currently does. Nothing is wrong with them — but do not read a green test as evidence the rules matter in play yet.
+- **The ambush sting is the only sound in the game, and it is synthesised.** No asset, no loader, no Phaser sound manager. It is a placeholder in the same register as the coloured rectangles, and the whole of `playAmbushSting` is replaceable by one `this.sound.play()` once the project takes on real audio. Until then a browser that blocks audio silently drops it — the try/catch is deliberate, and the message carries the moment on its own.
+- **The shop got more common and perfectly honest at once.** Shop doors are 21.5% of doors, and since the type is never lied about an amber door is now reliably a shop. Both are straight buffs to the item economy that fell out of the merge rather than being chosen; the shop is already the main item source, and nothing has measured what this does over a long run.
 - **There is no floor.** `CORRIDOR_FLOOR_DOORS = 10` stands in for a room count nothing computes, and the corridor list is rolled once by `freshGameState` and never rolled again — so a run past its tenth door simply stops meeting corridors. It is right for as long as a run is one floor, which is exactly as long as there is no floor boundary. Whatever introduces floors has to re-roll the list and reset `doorsTaken` with it.
 - **The corridor exit's plain slate is a placeholder, not final art.** It is a coloured rectangle like everything else on screen and is to be replaced with a PNG. What has to survive that swap is what the colour is carefully *not* saying: no reward type, no difficulty tier, nothing that reads as a second choice.
 - **A risky room's payout is still refusable, though it is now worth taking.** Each debuff carries a real bonus, so walking around one costs the player something - which is the fix for "why would anyone touch this". But with no take/skip UI, refusing is still just a matter of not walking into it, so a player who does not want *that particular* trade pays nothing to skip it. Live with it, or make the payout land on the player rather than on the floor.
@@ -806,7 +842,7 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [ ] A run that ends: depth counter, a boss or a final room. Doors chain forever right now.
 - [ ] Title screen, so the pause menu's **Exit** has somewhere to go other than a fresh run.
 - [x] ~~Room exit~~ — a cleared room opens the door row that carries the run into the next room.
-- [x] ~~**Door telegraph**~~ — `doors.js`; 2-3 doors, colour = reward type, glow = tier, honest 90%/90% per channel (81% on both). Retired the `P` key and the 5-enemy hack.
+- [x] ~~**Door telegraph**~~ — `doors.js`; 2-3 doors, colour = room type and always honest, glow = tier and also honest. The lie system it shipped with is deleted; the surprise is the room twist instead.
 - [x] ~~Spawn weighting off `countOwned`~~ — `weights.js`; weight halves per copy held, wired into reward, treasure and shop rolls.
 - [x] ~~EXP currency and a shop to spend it in~~ — `currency.js`, `shop.js`, shop room type, both refills, price table; guards come off the door tier, hold off until a purchase lands, and a visit buys exactly one thing.
 - [x] ~~Vary room density~~ — `obstacles.js`; coverage rolled 0-33% per room instead of a fixed quarter, empty rooms included.
