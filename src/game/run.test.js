@@ -203,6 +203,8 @@ describe('the run twist budget', () => {
 
     expect(state.twistsSoFar).toBe(0)
     expect(state.lastRoomWasTwist).toBe(false)
+    // and no ambush line yet, so the first one of a run can be any of the 28
+    expect(state.lastTwistLine).toBe(null)
   })
 
   it('books a twist and remembers it', () => {

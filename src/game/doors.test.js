@@ -7,6 +7,8 @@ import {
   MAX_TWIST_CAP,
   TWISTED_PLAN,
   TWIST_CHANCE,
+  TWIST_LINES,
+  pickTwistLine,
   mustStaySafe,
   rollTwist,
   rollTwistCap,
@@ -470,5 +472,103 @@ describe('twists across a whole run', () => {
     for (let room = 0; room < 20; room++) {
       expect(enter(run, shop, alwaysTwist)).toBe(false)
     }
+  })
+})
+
+// What the ambush says. One line drawn from a pool, rather than the single fixed line it
+// shipped with - a surprise that says the same words every time stops being one the second
+// time you meet it.
+//
+// The lines are flavour and nothing else: no register is marked, tagged or styled
+// differently, and the player has no way to tell which group a line came from. They are
+// grouped in the source only so they stay editable.
+describe('the ambush line pool', () => {
+  it('holds 28 lines', () => {
+    expect(TWIST_LINES).toHaveLength(28)
+  })
+
+  it('has no duplicates - a repeat would quietly halve its own odds', () => {
+    expect(new Set(TWIST_LINES).size).toBe(TWIST_LINES.length)
+  })
+
+  it('is all non-empty text', () => {
+    TWIST_LINES.forEach((line) => {
+      expect(typeof line).toBe('string')
+      expect(line.trim().length).toBeGreaterThan(0)
+    })
+  })
+})
+
+describe('pickTwistLine', () => {
+  it('draws from the pool', () => {
+    expect(TWIST_LINES).toContain(pickTwistLine(null, () => 0))
+    expect(TWIST_LINES).toContain(pickTwistLine(null, () => 0.999))
+  })
+
+  it('reaches every line in the pool', () => {
+    const seen = new Set()
+
+    for (let i = 0; i < 20000; i++) {
+      seen.add(pickTwistLine(null, Math.random))
+    }
+
+    expect(seen.size).toBe(TWIST_LINES.length)
+  })
+
+  // The one rule on top of the draw: the same line never lands twice running. Two
+  // identical ambushes in a row reads as the game repeating itself rather than as a pool.
+  it('never returns the line it was told was last', () => {
+    TWIST_LINES.forEach((last) => {
+      ;[0, 0.25, 0.5, 0.75, 0.999].forEach((roll) => {
+        expect(pickTwistLine(last, () => roll)).not.toBe(last)
+      })
+    })
+  })
+
+  it('can still reach every other line when one is excluded', () => {
+    const excluded = TWIST_LINES[0]
+    const seen = new Set()
+
+    for (let i = 0; i < 20000; i++) {
+      seen.add(pickTwistLine(excluded, Math.random))
+    }
+
+    expect(seen.size).toBe(TWIST_LINES.length - 1)
+    expect(seen.has(excluded)).toBe(false)
+  })
+
+  // Walked as a run walks it: each pick told what the previous one was.
+  it('never repeats across a long sequence of ambushes', () => {
+    let last = null
+
+    for (let i = 0; i < 5000; i++) {
+      const line = pickTwistLine(last, Math.random)
+
+      expect(line).not.toBe(last)
+      last = line
+    }
+  })
+
+  // A line the pool has never heard of excludes nothing, so an unknown or stale value
+  // cannot shrink the draw.
+  it('ignores a last line that is not in the pool', () => {
+    const seen = new Set()
+
+    for (let i = 0; i < 20000; i++) {
+      seen.add(pickTwistLine('something else entirely', Math.random))
+    }
+
+    expect(seen.size).toBe(TWIST_LINES.length)
+  })
+
+  it('spends exactly one roll', () => {
+    let calls = 0
+
+    pickTwistLine(null, () => {
+      calls += 1
+      return 0.5
+    })
+
+    expect(calls).toBe(1)
   })
 })

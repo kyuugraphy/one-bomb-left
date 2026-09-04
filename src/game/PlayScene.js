@@ -24,6 +24,7 @@ import {
   DOOR_STYLE,
   TIER_GLOW,
   TWISTED_PLAN,
+  pickTwistLine,
   rollTwist,
   roomPlanFor,
   rollDoors
@@ -197,9 +198,38 @@ const AMBUSH_STING_SAG = 0.92
 
 // The freeze. The room stops while the word is on screen, so an ambush is a beat rather
 // than a line of text you read while being shot at.
-const AMBUSH_FREEZE_MS = 500
+//
+// **One length for every line, set by the longest.** It was 500 ms when the message was a
+// single short fixed string, then scaled per character once the pool arrived - but the
+// scaling bought little: the pool runs 28 to 94 characters, so it only ever moved between
+// 2.2 and 3.4 seconds, and the short lines were never the ones anybody struggled with. A
+// flat number long enough for the worst case is simpler and reads the same.
+//
+// Deliberately generous. This is a surprise: the player is not braced to read, has just
+// been told they were tricked, and is looking at nine enemies. Reaction time comes out of
+// the same budget as reading time.
+const AMBUSH_FREEZE_MS = 3500
+
+// The shake does **not** scale with it. It is the hit, not the reading - a jolt that lasted
+// three seconds would be motion sickness rather than impact.
+const AMBUSH_SHAKE_MS = 300
+
 const AMBUSH_TEXT_SIZE = '52px'
 const AMBUSH_SUBTEXT_SIZE = '20px'
+// Room to breathe either side of the wrapped line, so it never runs to the wall.
+const AMBUSH_TEXT_MARGIN = 240
+
+// A panel behind the words. Red text over red enemies is the same colour twice, and an
+// ambush drops nine of them into the room the message is trying to be read in - so the
+// letters were landing on top of the very thing they were warning about.
+//
+// Near-black navy rather than pure black: it sits in the same slate family as the walls
+// and the HUD plates, so it reads as part of the interface rather than as a hole. Light
+// enough at 0.3 that the room stays visible through it - the player should be able to see
+// what they have walked into while they read what they walked into.
+const AMBUSH_PANEL_COLOR = 0x0f172a
+const AMBUSH_PANEL_ALPHA = 0.3
+const AMBUSH_PANEL_PAD = 24
 
 const CORRIDOR_EXIT_COLOR = 0xcbd5e1
 const CORRIDOR_EXIT_ALPHA = 0.22
@@ -1987,7 +2017,13 @@ ${advertised.tier}`, {
       return
     }
 
-    const was = DOOR_STYLE[this.twisted.type].label.toLowerCase()
+    // One line out of 28, never the one the last ambush used. The memory is on gameState
+    // rather than here because each room is a new scene: a scene-held value would forget
+    // between ambushes and the no-repeat rule would mean nothing.
+    const line = pickTwistLine(this.gameState.lastTwistLine, Math.random)
+
+    this.gameState.lastTwistLine = line
+
     const { width, height } = this.scale
 
     // Screen-centred and screen-pinned, not room-centred: a big room scrolls, and the
@@ -2001,21 +2037,43 @@ ${advertised.tier}`, {
       })
       .setOrigin(0.5)
       .setScrollFactor(0)
-      .setDepth(HUD_DEPTH + 1)
+      .setDepth(HUD_DEPTH + 2)
 
-    const line = this.add
-      .text(width / 2, height / 2 + 30, `the ${was} was a trap`, {
+    // Wrapped, because the pool runs to 96 characters and a single line of it would
+    // overrun a 1344 px room and be cut off at both ends.
+    const said = this.add
+      .text(width / 2, height / 2 + 30, line, {
         fontFamily: 'monospace',
         fontSize: AMBUSH_SUBTEXT_SIZE,
-        color: '#fca5a5'
+        color: '#fca5a5',
+        align: 'center',
+        wordWrap: { width: width - AMBUSH_TEXT_MARGIN }
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(HUD_DEPTH + 2)
+
+    // Measured off what the two texts actually laid out to, rather than off a guessed
+    // size: the line is wrapped, so how tall it ends up is not known until it exists.
+    // displayWidth/Height rather than getBounds() because these are screen-pinned, and
+    // bounds would be reported against a camera that has scrolled.
+    const top = word.y - word.displayHeight / 2 - AMBUSH_PANEL_PAD
+    const bottom = said.y + said.displayHeight + AMBUSH_PANEL_PAD
+    const panel = this.add
+      .rectangle(
+        width / 2,
+        (top + bottom) / 2,
+        Math.max(word.displayWidth, said.displayWidth) + AMBUSH_PANEL_PAD * 2,
+        bottom - top,
+        AMBUSH_PANEL_COLOR,
+        AMBUSH_PANEL_ALPHA
+      )
       .setScrollFactor(0)
       .setDepth(HUD_DEPTH + 1)
 
     this.playAmbushSting()
-    this.cameras.main.shake(AMBUSH_FREEZE_MS, 0.006)
-    this.freezeForAmbush([word, line])
+    this.cameras.main.shake(AMBUSH_SHAKE_MS, 0.006)
+    this.freezeForAmbush([panel, word, said])
   }
 
   // The room stops for as long as the word is up. Physics is paused rather than the scene,

@@ -29,6 +29,11 @@ export function freshGameState(randomFn = Math.random) {
     twistCap: rollTwistCap(randomFn),
     twistsSoFar: 0,
     lastRoomWasTwist: false,
+    // The last ambush line shown, so the next one can avoid it. Here rather than in the
+    // scene for the same reason as the rest of this block: each room is a new scene, so a
+    // scene-held value would forget between ambushes and "no repeats" would mean nothing.
+    // null on a fresh run, so the first ambush of a run can be any of the 28.
+    lastTwistLine: null,
     // How many doors the player has walked through, which is not the same as how many
     // rooms they have been in: a corridor is spliced in behind a door and costs a door
     // without costing a room. roomNumber counts rooms, this counts doors, and the two

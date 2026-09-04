@@ -201,6 +201,64 @@ export function mustStaySafe({ twistCap, twistsSoFar, lastRoomWasTwist }) {
 // choose it.
 export const TWISTED_PLAN = roomPlanFor({ type: 'combat', tier: 'hard' })
 
+// What the ambush says. One line drawn from the pool below, in place of the single fixed
+// line this shipped with - a surprise that says the same words every time stops being one
+// the second time you meet it.
+//
+// **The groupings are for editing, not for the player.** Nothing marks, tags or styles a
+// register differently; every line is plain text in the same place, and there is no way to
+// tell from inside the game which block a line came from. They are kept grouped and
+// commented here only so they stay easy to add to and rewrite.
+export const TWIST_LINES = [
+  // --- delighted, and enjoying it -------------------------------------------------
+  "Fooled you again~ This little trap was just for you. Don't pout, it's cuter when you struggle.",
+  'Surprise~ Did that sting a little? Good. It means it worked.',
+  "Aww, you actually believed it. That's almost sweet.",
+  'Oh, you fell right in. How adorable.',
+  'A little trap, wrapped up just for you~',
+  "Didn't see that coming? Neither did you, apparently.",
+  "You walked right into my hands. I don't mind.",
+
+  // --- patient, and has watched this before ---------------------------------------
+  "You always come back for more. It's almost sweet.",
+  'Every time, the same door. Every time, the same you.',
+  'You keep choosing this. I keep letting you.',
+  'You always fall for it. I like to watch you fall. Always.',
+  'You fall so easily. I never get tired of it.',
+  "I could stop this. I don't want to.",
+  'This never gets old. Not for me, anyway.',
+
+  // --- apologetic, and faintly alarmed by its own house ---------------------------
+  'Oh dear. Wrong door, wrong day, wrong everything.',
+  'It only looked friendly. Most traps do.',
+  "Ah. That wasn't supposed to happen. Or perhaps it was.",
+  'How peculiar. It seemed so trustworthy.',
+  'Well. That escalated with remarkably little warning.',
+  'Terribly sorry. This sort of thing does happen here.',
+  "That's odd. It never does this to the others.",
+
+  // --- showman, and pleased with the craft ----------------------------------------
+  'A little theater never hurt anyone. You, on the other hand—',
+  'A little misdirection goes a long way.',
+  "Misdirection only works once you've stopped looking for it.",
+  'The best tricks explain themselves. Eventually.',
+  'A twist works best when no one suspects a script.',
+  'Every trap is just a trick with worse manners.',
+  'The setup was the easy part.'
+]
+
+// One line, never the one before it. The exclusion is by value rather than by index so a
+// stale or unknown `lastLine` - an older save, a line since rewritten - simply excludes
+// nothing instead of silently dropping a real one from the draw.
+//
+// Filtering rather than rerolling keeps it to a single roll and keeps the remaining 27
+// exactly equally likely; a reroll-until-different loop would be unbounded and no fairer.
+export function pickTwistLine(lastLine, randomFn) {
+  const options = TWIST_LINES.filter((line) => line !== lastLine)
+
+  return options[Math.floor(randomFn() * options.length)]
+}
+
 // Whether this room turns hostile, rolled at the door alongside the plan and the shape so
 // the room is settled before the scene ever starts - the same place and the same moment as
 // every other property of a room.
