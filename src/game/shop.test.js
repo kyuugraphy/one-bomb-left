@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createInventory } from './inventory.js'
+import { weightedPassivePool } from './weights.js'
 import { ITEMS, getItem, itemsFrom } from './items.js'
 import {
   BOMB_REFILL,
@@ -38,12 +39,13 @@ describe('rollShopStock', () => {
     expect(shelves.some((s) => s.every((entry) => entry.kind === 'item'))).toBe(true)
   })
 
-  it('can still stock both refills at once', () => {
+  // This used to assert that a shelf could carry both refills at once. Only one refill is
+  // stocked now - the Bomb Refill is held back while bombs do nothing - so the property
+  // worth keeping is that the one that *is* stocked still turns up.
+  it('still puts a refill on a shelf sometimes', () => {
     const shelves = Array.from({ length: 300 }, () => rollShopStock(POOL, Math.random))
 
-    expect(
-      shelves.some((s) => s.includes(HP_REFILL) && s.includes(BOMB_REFILL))
-    ).toBe(true)
+    expect(shelves.some((s) => s.includes(HP_REFILL))).toBe(true)
   })
 
   it('never stocks the same refill twice', () => {
@@ -107,11 +109,13 @@ describe('rollShopStock', () => {
     )
   })
 
+  // One catalogue item plus the one stocked refill: two, where a three-slot shelf would
+  // like three. A shelf takes what the pool can give it rather than padding itself.
   it('stocks what it can when the pool is smaller than the shelf', () => {
     const stock = rollShopStock([POOL[0]], rng(0.99, 0))
 
     expect(stock.filter((entry) => entry.kind === 'item')).toHaveLength(1)
-    expect(stock).toHaveLength(3)
+    expect(stock).toHaveLength(2)
   })
 
   it('draws by weight, so a half-weighted item loses its share of the roll', () => {
@@ -130,12 +134,12 @@ describe('rollShopStock', () => {
     expect(stock[0].item).toBe(heavy)
   })
 
-  it('stocks the refills alone when the catalogue pool is empty', () => {
+  it('stocks the refill alone when the catalogue pool is empty', () => {
     const stock = rollShopStock([], rng(0, 0))
 
-    expect(stock).toHaveLength(2)
+    expect(stock).toHaveLength(1)
     expect(stock).toContain(HP_REFILL)
-    expect(stock).toContain(BOMB_REFILL)
+    expect(stock).not.toContain(BOMB_REFILL)
   })
 
 })
@@ -352,5 +356,54 @@ describe('purchaseBlockedReason', () => {
 
     expect(JSON.stringify(inventory)).toBe(snapshot)
     expect(state.health).toBe(4)
+  })
+})
+
+// Found in play, twice: a shop with 6 EXP in hand, a Bomb Refill at 3 and everything else
+// out of reach. The doors stayed shut - correctly, by the rule - because there *was*
+// something affordable and buyable on the shelf. But a bomb does nothing: bombs.js is
+// imported by nothing outside its own test, useBomb has never been called, and bombCount
+// only ever goes up. So the offer was "pay 3 EXP for a counter that does not do anything,
+// or stand here", which is not a choice worth holding a door shut over.
+//
+// The shelf is where this belongs rather than the exit gate. A gate that ignored bombs
+// would still leave the shop selling one, and selling a thing that does nothing is the
+// actual defect - the stuck door was only how it was noticed.
+describe('what the shop will not sell yet', () => {
+  // the same pool PlayScene.shopPool() builds
+  const shopPool = () => {
+    const inventory = createInventory()
+
+    return weightedPassivePool(inventory, sellableItems(ITEMS, inventory))
+  }
+
+  it('never stocks a Bomb Refill while bombs do nothing', () => {
+    for (let shelf = 0; shelf < 5000; shelf++) {
+      const stock = rollShopStock(shopPool(), Math.random)
+
+      expect(stock.some((entry) => entry.kind === 'bomb_refill')).toBe(false)
+    }
+  })
+
+  // The HP Refill is untouched: healing works, so selling it is a real offer.
+  it('still stocks an HP Refill', () => {
+    let seen = 0
+
+    for (let shelf = 0; shelf < 2000; shelf++) {
+      const stock = rollShopStock(shopPool(), Math.random)
+
+      if (stock.some((entry) => entry.kind === 'hp_refill')) {
+        seen += 1
+      }
+    }
+
+    expect(seen).toBeGreaterThan(0)
+  })
+
+  // Kept exported and priced, so the day bombs are wired the whole change is putting it
+  // back in the pool - not rebuilding it.
+  it('keeps the Bomb Refill defined and priced, ready for the day bombs work', () => {
+    expect(BOMB_REFILL.kind).toBe('bomb_refill')
+    expect(priceOf(BOMB_REFILL)).toBeGreaterThan(0)
   })
 })

@@ -21,6 +21,22 @@ export const SHOP_PRICES = {
 export const HP_REFILL = { kind: 'hp_refill', name: 'HP Refill', effect: 'restore all HP' }
 export const BOMB_REFILL = { kind: 'bomb_refill', name: 'Bomb Refill', effect: '+1 bomb' }
 
+// Which refills a shelf may actually offer. **The Bomb Refill is held back**, because a
+// bomb does nothing yet: bombs.js is imported by nothing outside its own test, useBomb has
+// never been called, and bombCount only ever goes up and gets printed on the HUD.
+//
+// Found in play. A shop with 6 EXP in hand, a Bomb Refill at 3 and everything else out of
+// reach held its doors shut - correctly, by the rule, because something on the shelf was
+// both affordable and buyable. But the offer was "pay 3 EXP for a counter that does not do
+// anything, or stand here", which is not a choice worth holding a door shut over.
+//
+// Fixed on the shelf rather than at the exit gate on purpose: a gate that ignored bombs
+// would still leave the shop selling one. Selling a thing that does nothing is the defect;
+// the stuck-feeling door was only how it got noticed.
+//
+// BOMB_REFILL stays exported and priced, so the day bombs are wired this is one line.
+const STOCKED_REFILLS = [HP_REFILL]
+
 // Exactly three things for sale, every visit. It used to roll 3-4 catalogue items on top
 // of both refills, so a shelf was 5 or 6 wide and reading it was a chore rather than a
 // choice. Three is a shelf you take in at a glance - and since a visit buys exactly one
@@ -89,7 +105,7 @@ export function rollShopStock(entries, randomFn) {
   // refill, which is already a stock entry.
   const pool = [
     ...entries.map(({ item, weight }) => ({ item: { kind: 'item', item }, weight })),
-    ...[HP_REFILL, BOMB_REFILL].map((refill) => ({ item: refill, weight: REFILL_WEIGHT }))
+    ...STOCKED_REFILLS.map((refill) => ({ item: refill, weight: REFILL_WEIGHT }))
   ]
   const stock = []
 
