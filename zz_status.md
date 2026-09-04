@@ -5,7 +5,7 @@ _Last updated: 2026-09-03_
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
 ## Latest session (2026-09-04) — corridors, finished and walkable
-Obstacles and doors both landed, and a corridor can be walked in the browser. The debug `L` key now cycles **L, Z, T, G, corridor**.
+Obstacles and doors both landed, and a corridor can be walked in the browser. The debug `L` key now cycles **L, Z, T, G, corridor**. Playtested: sidestepping obstacles in a 3-wide corridor reads as tension rather than friction. One rendering bug found and fixed with it — a room narrower than the viewport drew against the edge instead of centred.
 
 ## Previous session (2026-09-03, thirteenth pass) — corridor rooms, part one
 `generateCorridorRoom(randomFn)` is in: a corridor's orientation and dimensions, test-first, pure. It hands back the same shape object the L/Z/T/G masks are, so everything in `shapeRoom.js` reads it unchanged — but it is **rolled rather than hand-authored**, because a corridor has no silhouette worth drawing and its mask would otherwise be sixty lines of hashes.
@@ -469,6 +469,22 @@ Three across rather than two because a 36 px enemy in a straight run with nowher
 Verified on the real output: 672 px at the shortest and 3360 px at the longest, 168 px across in both orientations, **50.6% horizontal over 20,000 rolls**, and all 49 walkable lengths reachable.
 
 **Obstacles and doors are done** — see the two sections below.
+
+### A room narrower than the viewport
+A vertical corridor drew hard against the **left** of the screen whatever the player did, and a horizontal one against the **top**.
+
+Nothing was computing an offset and getting it wrong — there was no offset. The camera was handed the room's own bounds, and Phaser keeps the camera inside its bounds: when those bounds are smaller than the viewport the clamp has no slack to give, so it pins the camera at the near edge and `scrollX` never leaves zero. 280 px of corridor then sits at screen x 0 of a 1344 px viewport.
+
+`cameraBoundsFor(width, height)` now gives an axis where the room is smaller than the screen the **screen's** size for its bounds, with the slack hung evenly off both sides. The clamp then has exactly one position to settle on, and that position is centred. An axis where the room is at least as big as the screen is untouched.
+
+| room | camera bounds | where it draws |
+|---|---|---|
+| rectangle 1344x840 | `0,0,1344,840` | unchanged |
+| big room 2240x2240 | `0,0,2240,2240` | unchanged |
+| vertical corridor 280x2576 | `-532,0,1344,2576` | screen x 532-812, centre 672 |
+| horizontal corridor 3024x280 | `0,-280,3024,840` | screen y 280-560, centre 420 |
+
+Measured after the change: all five existing room shapes still report bounds of `0,0` at their own size, so none of them moved.
 
 ### Corridor obstacles and doors
 **Obstacles are placed uniformly, not by `pickSeed`.** The base-room generator seeds two thirds of every shape into a 3-cell band hugging the wall — and a corridor is 3 cells wide, so the whole width is that band and the bias buys nothing but clustering. It also grows rocks into clumps of up to 8 cells and pits into noodles of up to 12, either of which spans a corridor end to end. So corridor obstacles are **single cells**, drawn uniformly without replacement, tagged rock or pit at the same 0.6 split, at **10-15%** coverage rolled per corridor and rounded rather than floored (a 36-cell corridor cannot land on a tenth exactly).
