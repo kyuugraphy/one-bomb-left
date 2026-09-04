@@ -1,10 +1,15 @@
 # one-bomb-left — Status
 
-_Last updated: 2026-09-03_
+_Last updated: 2026-09-04_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
-## Latest session (2026-09-04) — corridors, finished and walkable
+## Latest session (2026-09-04, second pass) — corridors reach real runs
+A corridor is no longer debug-only. **1-5 of them per floor, banded by how long the floor is**, pre-rolled at the start of the run and spliced in behind an ordinary door. The telegraph never mentions one: the door you took still names the room you are walking toward, and the corridor sits in front of it. It costs a door but not a room number, so a floor's room total is what it was.
+
+Its exit is **a real pad that says nothing** — the same 48 px square as any other door, plain slate, no reward colour, no tier glow, no pulse, no label. It was an invisible trigger for one build, which is what the spec asked for and what it should not have asked for: an exit you cannot see is a wall you happen to pass through.
+
+## Previous session (2026-09-04, first pass) — corridors, finished and walkable
 Obstacles and doors both landed, and a corridor can be walked in the browser. The debug `L` key now cycles **L, Z, T, G, corridor**. Playtested: sidestepping obstacles in a 3-wide corridor reads as tension rather than friction. One rendering bug found and fixed with it — a room narrower than the viewport drew against the edge instead of centred.
 
 ## Previous session (2026-09-03, thirteenth pass) — corridor rooms, part one
@@ -505,7 +510,26 @@ The test's end-to-end flood fill moved with it: **"end to end" means door pad to
 
 **Walked in the browser.** A 40x5 vertical corridor, 280x2240 px: spawn at one end, door at the other, 12 obstacles at 10.5% coverage, both enemies pathing the full 39 cells down it. Steered end to end through the real movement keys in 389 frames (6.5 s), dodging rocks, and took the door into room 2. A horizontal one comes out 5x54, 3024x280 px. Note holding a single direction is not enough to cross one — a rock in the middle lane stops you until you sidestep, which is the corridor doing its job.
 
-**Not wired into the run yet.** `rollRoomShape` deals only L/Z/T/G in the 3-7 band, so a corridor is reachable only through the debug key. Where corridors belong in a run — between rooms, as their own band, or as connectors that do not count as a room at all — is undecided.
+**Wired into the run** — see the section below. `rollRoomShape` still deals only L/Z/T/G in the 3-7 band; a corridor does not come from there, because it is not one of a room's shapes but a thing that happens *between* rooms.
+
+### Corridors in a run (`rollCorridorDoors` in `corridor.js`, the splice in `PlayScene`)
+**Which door-takings have a corridor behind them is rolled once, for the whole floor, up front.** That is sound rather than merely convenient: the number of doors taken on a floor does not depend on *which* doors are taken — one per room, always — so there is nothing to learn by waiting. Two things follow that a per-door probability could not give. The count is exactly the band, where a coin flip aimed at it would sometimes deal none and sometimes twice too many. And **no two corridors can land back to back** as a property of the construction rather than as a retry: pick `count` values out of `doorCount - count + 1`, sort, and add each one's position to it, which maps every plain combination onto exactly one gap-of-two selection and back. The draw stays uniform over the spread-out selections rather than favouring whichever ones a rejection loop finds first.
+
+**The count scales with the floor.** A flat 1-3 was the first design and it did not survive the arithmetic: it left floor 1 at a corridor every 3.5 rooms and a fifteen-room floor at one every 7.5 — the same corridors spread twice as thin, so the pacing quietly drains out of the longer floors. Steps rather than a formula, lined up with the floor sizes themselves:
+
+| floor length | corridors | mean gap |
+|---|---|---|
+| ≤ 7 rooms | 1-3 | 3.4 |
+| 8-11 rooms | 1-4 | 3.6 |
+| 12+ rooms | 2-5 | 3.8 |
+
+`CORRIDOR_FLOOR_DOORS = 10` is a stand-in for the floor's own room count until floor logic exists — `rollCorridorDoors` takes the count as an argument, so a real floor will pass its own. It is **even on purpose**: reversing a valid selection gives another valid one, so on an odd floor the middle door falls on one side of a halfway split and skews the even-spread test by itself.
+
+**`doorsTaken` is a second counter beside `roomNumber`**, and the two drift apart by exactly the number of corridors walked. That is the whole of "a corridor does not count as a room": `roomNumber` drives the big-room band and the depth display and is not touched, while `doorsTaken` indexes the pre-rolled list.
+
+**The destination is held, not re-rolled.** `takeDoor` resolves the door as it always did — plan, lie, shape — and then, if a corridor is due, restarts into the corridor with that whole resolved destination parked in `pending`. `leaveCorridor` restarts into it on contact. So the corridor cannot change what is on the other side, and the misled toast still fires in the room the door lied about rather than in the hallway before it.
+
+**The room-clear gate applies to a corridor too:** its two enemies have to die before the exit opens. A corridor with a way out you can walk straight past is a long empty hallway.
 
 ### Placeholder item icons
 A coloured geometric shape per item, in the same register as the player, the enemies and everything else on screen. **Shape is the tier, colour is the item**, so one glyph says both what kind of thing this is and which one:
@@ -692,6 +716,8 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
+- **There is no floor.** `CORRIDOR_FLOOR_DOORS = 10` stands in for a room count nothing computes, and the corridor list is rolled once by `freshGameState` and never rolled again — so a run past its tenth door simply stops meeting corridors. It is right for as long as a run is one floor, which is exactly as long as there is no floor boundary. Whatever introduces floors has to re-roll the list and reset `doorsTaken` with it.
+- **The corridor exit's plain slate is a placeholder, not final art.** It is a coloured rectangle like everything else on screen and is to be replaced with a PNG. What has to survive that swap is what the colour is carefully *not* saying: no reward type, no difficulty tier, nothing that reads as a second choice.
 - **A risky room's payout is still refusable, though it is now worth taking.** Each debuff carries a real bonus, so walking around one costs the player something - which is the fix for "why would anyone touch this". But with no take/skip UI, refusing is still just a matter of not walking into it, so a player who does not want *that particular* trade pays nothing to skip it. Live with it, or make the payout land on the player rather than on the floor.
 - **Healing is now a coin flip you do not control.** The HP Refill turns up on 25% of shelves since all three slots became rolled, and it is the only full heal in the game. A run that draws three item-only shops in a row has no way to top up beyond half-heart floor drops. `REFILL_WEIGHT` in `shop.js` is the knob if that plays too thin; a floor rule ("at least one refill per shelf") would be the other answer, at the cost of the varying shelf this change was for.
 - **A puzzle room is not empty if you carry Slug Step.** The room generates nothing, but the slug is something the player brought with them, so it follows them in. Correct as far as it goes, but worth revisiting once a puzzle room has actual contents.
@@ -765,7 +791,7 @@ _Note for future browser testing:_ an unfocused/background tab gets no `requestA
 Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a fresh load in Chrome renders the full 1344x840 room with the health bar now unobstructed in the top-left - console shows Phaser v4.2.1 booting with no errors and no leftover diag output.
 
 ## Temporary play-test scaffolding — ONE LIVE
-- **`DEBUG_SHAPE_KEY` in `PlayScene.js` — LIVE.** Pressing **`L`** rebuilds the room as a big room, carrying the run's items and health across, on a `combat_heavy`/`medium` plan so there are six enemies to watch find their way round the shape. Each press moves on to the next: **L → Z → T → G → L**. Take a door or press `R` to get back to an ordinary rectangular room. It is the only way into a big room: nothing rolls a shape yet. Fenced in `DEBUG` banners, warns on startup. **Remove it, `DEBUG_SHAPE_CYCLE`, and the key binding in `create()` and `update()`, once a door can lead to a big room.**
+- **`DEBUG_SHAPE_KEY` in `PlayScene.js` — LIVE.** Pressing **`L`** rebuilds the room as a big room, carrying the run's items and health across, on a `combat_heavy`/`medium` plan so there are six enemies to watch find their way round the shape. Each press moves on to the next: **L → Z → T → G → corridor → L**. Take a door or press `R` to get back to an ordinary rectangular room. It is the only way into a big room: nothing rolls a shape yet. Fenced in `DEBUG` banners, warns on startup. **Remove it, `DEBUG_SHAPE_CYCLE`, and the key binding in `create()` and `update()`, once a door can lead to a big room.**
 - Retired: the 5-enemies-on-entry hack is now the room plan's own count, the `P` debug shop key is unnecessary now that a gold door leads to one, and the `G` reward-drop key and its five extra trinkets were reverted.
 
 ## TODO — next features
