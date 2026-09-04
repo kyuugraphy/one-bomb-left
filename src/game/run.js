@@ -9,6 +9,7 @@
 // `restart()` is called with no argument at all, so the previous room's payload comes
 // straight back - which is why every fresh-run restart passes `{}` explicitly.
 
+import { CORRIDOR_FLOOR_DOORS, rollCorridorDoors } from './corridor.js'
 import { ENTRANCE_DOOR, isLie, rollLieCap, roomPlanFor } from './doors.js'
 import { createInventory } from './inventory.js'
 
@@ -28,6 +29,14 @@ export function freshGameState(randomFn = Math.random) {
     lieCap: rollLieCap(randomFn),
     liesSoFar: 0,
     lastDoorWasLie: false,
+    // How many doors the player has walked through, which is not the same as how many
+    // rooms they have been in: a corridor is spliced in behind a door and costs a door
+    // without costing a room. roomNumber counts rooms, this counts doors, and the two
+    // drift apart by exactly the number of corridors walked.
+    doorsTaken: 0,
+    // Which door-takings of this floor have a corridor behind them, rolled once at the
+    // start. See rollCorridorDoors for why up front rather than per door.
+    corridorDoors: rollCorridorDoors(CORRIDOR_FLOOR_DOORS, randomFn),
     inventory: createInventory(),
     cooldowns: {}
   }
@@ -62,6 +71,9 @@ export function roomFor(data) {
     health: data?.carried?.health ?? null,
     // What the door claimed, when it turned out to be lying. null on an honest door and
     // on the entrance room, which no door chose.
-    misled: data?.misled ?? null
+    misled: data?.misled ?? null,
+    // The room this corridor is on the way to, held while the player walks it. null in
+    // every room that is not a corridor.
+    pending: data?.pending ?? null
   }
 }

@@ -142,6 +142,18 @@ if (DEBUG_SHAPE_KEY) {
   )
 }
 // ===== end DEBUG ============================================================
+// A corridor has no kind - no safe or risky or shop variant - so it does not go through
+// roomPlanFor and never appears in REWARD_TYPES. It is the same connector every time: a
+// couple of enemies, which in a hallway three cells wide is a real obstacle rather than a
+// fight, and nothing to hand out at the end of it.
+const CORRIDOR_PLAN = {
+  type: 'corridor',
+  tier: 'easy',
+  roomType: 'corridor',
+  enemyCount: 2,
+  enemyStrengthBonus: 0
+}
+
 const DROP_OFFSET = 84
 // A declined or just-dropped pickup stays inert until the player is this far from it, so
 // the prompt cannot re-open on the spot and a swap cannot be undone by standing still.
@@ -260,6 +272,8 @@ export class PlayScene extends Phaser.Scene {
     this.gameState = room.gameState
     this.startHealth = room.health
     this.misled = room.misled
+    // The room this corridor is on the way to, if this is one.
+    this.pending = room.pending
   }
 
   // Where the camera is allowed to look, which is not the same as where the room is.
@@ -311,6 +325,7 @@ export class PlayScene extends Phaser.Scene {
     this.gameOver = false
 
     this.doors = []
+    this.corridorExit = null
     this.leaving = false
 
     this.buildWalls(width, height)
@@ -1522,8 +1537,57 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    // A corridor opened its way on already; nothing else to do until it is walked into.
+    if (this.corridorExit) {
+      return
+    }
+
     this.payOutRoom()
+
+    if (this.roomType === 'corridor') {
+      this.openCorridorExit()
+      return
+    }
+
     this.openDoors()
+  }
+
+  // The far end of a corridor, once its enemies are down. Not a door: no pad, no colour,
+  // no tier glow, nothing to read and nothing to choose. The telegraph already spoke when
+  // the player took the door that led here, and the room it promised is the room they are
+  // still on their way to - saying it twice would turn a pause into a second decision.
+  //
+  // Unarmed, unlike a real door. Arming exists so a pad appearing underfoot cannot take a
+  // *choice* away, and there is no choice here: walking on is the only thing a corridor
+  // offers. A player standing at the end when the last enemy dies should simply continue.
+  openCorridorExit() {
+    const [cell] = doorCells(this.shape, this.shape.exits[0], 1)
+    const spot = this.centreOf(cell)
+
+    this.corridorExit = this.add.rectangle(spot.x, spot.y, CELL, CELL, 0x000000, 0)
+    this.physics.add.existing(this.corridorExit)
+    this.corridorExit.body.setAllowGravity(false)
+    this.corridorExit.body.setImmovable(true)
+
+    this.physics.add.overlap(this.player, this.corridorExit, () => this.leaveCorridor(), null, this)
+
+    this.toast('the way ahead is clear', '#86efac')
+  }
+
+  // Reaching the end hands over the room the corridor was always on the way to, resolved
+  // when the door was taken rather than now - so a corridor cannot change where you were
+  // going, only how long it takes to get there.
+  leaveCorridor() {
+    if (this.leaving) {
+      return
+    }
+
+    this.leaving = true
+
+    this.scene.restart({
+      ...this.pending,
+      carried: { gameState: this.gameState, health: this.health }
+    })
   }
 
   // Clearing a room pays exactly one item, decided by the door that led here rather than
@@ -1743,7 +1807,7 @@ ${advertised.tier}`, {
 
     this.gameState.roomNumber += 1
 
-    this.scene.restart({
+    const destination = {
       plan,
       misled: lied ? door.advertised : null,
       // A shop lays its stock along one line and needs bare floor to do it, so it stays a
@@ -1751,7 +1815,20 @@ ${advertised.tier}`, {
       shape:
         plan.roomType === 'shop'
           ? null
-          : rollRoomShape(this.gameState.roomNumber, Math.random),
+          : rollRoomShape(this.gameState.roomNumber, Math.random)
+    }
+
+    // Whether a corridor sits behind this door was decided when the floor was rolled, and
+    // the door itself knows nothing about it: its colour and its glow are the destination's
+    // and always were. The corridor is spliced in front, and the destination waits.
+    const corridorAhead = this.gameState.corridorDoors.includes(this.gameState.doorsTaken)
+
+    this.gameState.doorsTaken += 1
+
+    this.scene.restart({
+      ...(corridorAhead
+        ? { plan: CORRIDOR_PLAN, shape: 'corridor', pending: destination }
+        : destination),
       carried: { gameState: this.gameState, health: this.health }
     })
   }
@@ -1765,6 +1842,12 @@ ${advertised.tier}`, {
   // What the room turned out to be, said once on entry - the only way the player learns
   // whether the door they read was telling the truth.
   announceRoom() {
+    // A corridor has no door style to read a label off, because no door type leads to one.
+    if (this.roomType === 'corridor') {
+      this.toast('a corridor', '#94a3b8')
+      return
+    }
+
     const { label } = DOOR_STYLE[this.roomPlan.type]
     // A big room says which shape it is, because it is the first thing about it that
     // matters and the silhouette takes a walk to read from inside. A corridor just says

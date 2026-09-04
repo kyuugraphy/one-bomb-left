@@ -293,3 +293,96 @@ describe('roomFor - being told the door lied', () => {
     expect(roomFor({}).misled).toBe(null)
   })
 })
+
+// A corridor costs a door without costing a room, so the two counters have to be separate
+// and both have to die with the run.
+describe('doors taken and rooms entered', () => {
+  it('starts a run with no doors taken', () => {
+    expect(freshGameState().doorsTaken).toBe(0)
+  })
+
+  it('rolls the floor corridors when the run starts', () => {
+    const { corridorDoors } = freshGameState()
+
+    expect(Array.isArray(corridorDoors)).toBe(true)
+    expect(corridorDoors.length).toBeGreaterThan(0)
+  })
+
+  it('deals a new set of corridors to a new run', () => {
+    const seen = new Set()
+
+    for (let i = 0; i < 200; i++) {
+      seen.add(freshGameState().corridorDoors.join(','))
+    }
+
+    expect(seen.size).toBeGreaterThan(1)
+  })
+
+  it('carries both counters through a door', () => {
+    const gameState = freshGameState()
+
+    gameState.doorsTaken = 5
+    gameState.roomNumber = 4
+
+    const room = roomFor({
+      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      carried: { gameState, health: 3 }
+    })
+
+    expect(room.gameState.doorsTaken).toBe(5)
+    expect(room.gameState.roomNumber).toBe(4)
+  })
+
+  it('resets both when the run ends', () => {
+    const fresh = roomFor({}).gameState
+
+    expect(fresh.doorsTaken).toBe(0)
+    expect(fresh.roomNumber).toBe(1)
+  })
+})
+
+describe('roomFor - a corridor on the way somewhere', () => {
+  const destination = {
+    plan: roomPlanFor({ type: 'risky_reward', tier: 'hard' }),
+    misled: { type: 'safe_reward', tier: 'easy' },
+    shape: 'G'
+  }
+
+  it('holds the room the corridor is on the way to', () => {
+    const room = roomFor({
+      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      shape: 'corridor',
+      pending: destination,
+      carried: { gameState: freshGameState(), health: 3 }
+    })
+
+    expect(room.pending).toEqual(destination)
+  })
+
+  it('holds nothing pending in an ordinary room', () => {
+    const room = roomFor({
+      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      carried: { gameState: freshGameState(), health: 3 }
+    })
+
+    expect(room.pending).toBe(null)
+  })
+
+  it('holds nothing pending in the entrance room', () => {
+    expect(roomFor({}).pending).toBe(null)
+  })
+
+  // The lie is announced where it is found out, which is the destination - not in the
+  // corridor on the way to it.
+  it('keeps the misled notice with the destination, not the corridor', () => {
+    const corridor = roomFor({
+      plan: roomPlanFor({ type: 'safe_reward', tier: 'easy' }),
+      shape: 'corridor',
+      pending: destination,
+      carried: { gameState: freshGameState(), health: 3 }
+    })
+
+    expect(corridor.misled).toBe(null)
+    expect(corridor.pending.misled).toEqual(destination.misled)
+  })
+})
