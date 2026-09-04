@@ -17,6 +17,7 @@ import { DOOR_STYLE, TIER_GLOW, resolveDoor, roomPlanFor, rollDoors } from './do
 import { recordDoorOutcome, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
+import { generateCorridorObstacles, generateCorridorRoom } from './corridor.js'
 import { ROOM_SHAPES, rollRoomShape } from './shapes.js'
 import {
   cellCentre,
@@ -129,7 +130,7 @@ const CAMERA_LERP = 0.12
 // to get back to an ordinary rectangular room. Tracked in the cleanup TODO in
 // zz_status.md.
 const DEBUG_SHAPE_KEY = true
-const DEBUG_SHAPE_CYCLE = ['L', 'Z', 'T', 'G']
+const DEBUG_SHAPE_CYCLE = ['L', 'Z', 'T', 'G', 'corridor']
 // A packed room, not the entrance's single enemy: the point of walking the L is watching
 // several of them find their way round its corner.
 const DEBUG_SHAPE_PLAN = { type: 'risky_reward', tier: 'medium' }
@@ -252,10 +253,21 @@ export class PlayScene extends Phaser.Scene {
 
     this.roomPlan = room.plan
     this.roomType = room.roomType
-    this.shape = room.shapeId ? ROOM_SHAPES[room.shapeId] : null
+    // A corridor is rolled rather than looked up: its mask is generated, so there is no
+    // entry in ROOM_SHAPES to find. Rolled once here, in init, so it is settled before
+    // create() reads it and stays the same room for as long as the player is in it.
+    this.shape = this.shapeFor(room.shapeId)
     this.gameState = room.gameState
     this.startHealth = room.health
     this.misled = room.misled
+  }
+
+  shapeFor(shapeId) {
+    if (!shapeId) {
+      return null
+    }
+
+    return shapeId === 'corridor' ? generateCorridorRoom(Math.random) : ROOM_SHAPES[shapeId]
   }
 
   create() {
@@ -418,6 +430,19 @@ export class PlayScene extends Phaser.Scene {
     // geometry, and rolled clutter would only be in the way of it.
     if (this.roomType === 'shop' || this.roomType === 'puzzle') {
       this.coverage = 0
+      return
+    }
+
+    // A corridor lays its own clutter: it is three cells wide, so the shape-growing
+    // generator would span it end to end with a single rock, and the near-wall seeding
+    // bias means nothing when the whole width is the wall band. Uniform single cells at a
+    // tenth to a seventh instead, with the door pads and the landing spot held back.
+    if (this.shape?.id === 'corridor') {
+      const corridor = generateCorridorObstacles(this.shape, Math.random)
+
+      this.blocked = corridor.blocked
+      this.coverage = corridor.coverage
+      corridor.shapes.forEach(({ cells, asRock }) => this.paintShape(cells, asRock))
       return
     }
 
@@ -1528,7 +1553,11 @@ export class PlayScene extends Phaser.Scene {
         this.buildDoor(door, resolveDoor(door, this.gameState, Math.random), spots[index])
       )
 
-    this.toast(`room clear - ${this.doors.length} doors, pick one`, '#86efac')
+    // A corridor offers one door, and "1 doors, pick one" is not a sentence.
+    const choice =
+      this.doors.length === 1 ? 'one way on' : `${this.doors.length} doors, pick one`
+
+    this.toast(`room clear - ${choice}`, '#86efac')
   }
 
   buildDoor(advertised, actual, spot) {

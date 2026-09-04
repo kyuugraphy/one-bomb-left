@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { solidGrid } from './shapeRoom.js'
+import { DOOR_INSET, doorCells, innerCell, solidGrid, wallCells, wallRun } from './shapeRoom.js'
+import { doorCapacity } from './shapes.js'
 import {
   CORRIDOR_COVERAGE_MAX,
   CORRIDOR_COVERAGE_MIN,
@@ -216,32 +217,32 @@ const walkableCells = (shape) => {
   return cells
 }
 
-// The test's own flood fill, deliberately not the one the generator uses: this asks the
-// question a corridor actually cares about - can you get from one end to the other - and
-// answers it independently of whatever check the implementation ran.
+// The test's own flood fill, deliberately not the one the generator uses: it asks the
+// question a corridor actually cares about and answers it independently of whatever check
+// the implementation ran.
+//
+// "End to end" means **door pad to door pad**. It used to mean first walkable column to
+// last, from before doors existed, when the extreme columns were the only stand-in for
+// where you come in and go out. They are not that any more: a pad sits DOOR_INSET cells
+// in from its wall, so the column behind it is decoration the player never steps on, and
+// demanding it stay clear failed 0.4% of corridors over something that cannot be walked
+// to anyway. The pads themselves are reserved and connect in 5,000 of 5,000.
 const walksEndToEnd = (shape, blocked) => {
-  const cells = walkableCells(shape)
-  const along = shape.orientation === 'horizontal' ? 1 : 0
-  const ends = cells.map((cell) => cell[along])
-  const first = Math.min(...ends)
-  const last = Math.max(...ends)
-  const start = cells.find((cell) => cell[along] === first && !blocked[cell[0]][cell[1]])
+  const start = innerCell(shape.entry, DOOR_INSET)
+  const targets = shape.exits.flatMap((exit) => doorCells(shape, exit, 1))
 
-  if (!start) {
+  if (blocked[start[0]]?.[start[1]] !== false) {
     return false
   }
 
   const seen = new Set([start.join(',')])
   const queue = [start]
-  let reachedFarEnd = false
+  const reached = new Set()
 
   while (queue.length) {
     const [row, col] = queue.pop()
 
-    if ((along === 1 ? col : row) === last) {
-      reachedFarEnd = true
-    }
-
+    reached.add(`${row},${col}`)
     ;[[0, 1], [1, 0], [0, -1], [-1, 0]].forEach(([dRow, dCol]) => {
       const next = [row + dRow, col + dCol]
       const key = next.join(',')
@@ -255,7 +256,7 @@ const walksEndToEnd = (shape, blocked) => {
     })
   }
 
-  return reachedFarEnd
+  return targets.every((target) => reached.has(target.join(',')))
 }
 
 const corridorOf = (orientation, walkableLength) => {
@@ -459,5 +460,250 @@ describe('generateCorridorObstacles - connectivity', () => {
 
     expect(typeof result.rejected).toBe('number')
     expect(result.rejected).toBeGreaterThanOrEqual(0)
+  })
+})
+
+// ---------------------------------------------------------------------------------
+// Doors
+// ---------------------------------------------------------------------------------
+
+const FACINGS = { north: [-1, 0], south: [1, 0], east: [0, 1], west: [0, -1] }
+
+// Can you walk from one cell to another through the obstacles that were placed?
+const connects = (blocked, from, to) => {
+  if (blocked[from[0]]?.[from[1]] !== false || blocked[to[0]]?.[to[1]] !== false) {
+    return false
+  }
+
+  const seen = new Set([from.join(',')])
+  const queue = [from]
+
+  while (queue.length) {
+    const [row, col] = queue.pop()
+
+    if (row === to[0] && col === to[1]) {
+      return true
+    }
+
+    Object.values(FACINGS).forEach(([dRow, dCol]) => {
+      const next = [row + dRow, col + dCol]
+      const key = next.join(',')
+
+      if (seen.has(key) || blocked[next[0]]?.[next[1]] !== false) {
+        return
+      }
+
+      seen.add(key)
+      queue.push(next)
+    })
+  }
+
+  return false
+}
+
+const doorwaysOf = (shape) => [shape.entry, ...shape.exits]
+
+describe('generateCorridorRoom - doorways', () => {
+  it('carries an entry and at least one exit, shaped like every other doorway', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+
+      expect(shape.exits.length).toBeGreaterThan(0)
+      doorwaysOf(shape).forEach((doorway) => {
+        expect(Array.isArray(doorway.cell)).toBe(true)
+        expect(doorway.cell).toHaveLength(2)
+        expect(Object.keys(FACINGS)).toContain(doorway.facing)
+        expect(doorway.span).toBeGreaterThan(0)
+      })
+    }
+  })
+
+  // The corridor-specific rule, and the only one: the long sides are 33 cells of wall and
+  // would seat three doors each if anything let them. Nothing may.
+  it('never puts a doorway on a long side', () => {
+    for (let i = 0; i < 200; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const alongTheLongSide =
+        shape.orientation === 'horizontal' ? ['north', 'south'] : ['east', 'west']
+
+      doorwaysOf(shape).forEach((doorway) =>
+        expect(alongTheLongSide, shape.orientation).not.toContain(doorway.facing)
+      )
+    }
+  })
+
+  it('faces every doorway out along the long axis', () => {
+    for (let i = 0; i < 200; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const outTheEnds =
+        shape.orientation === 'horizontal' ? ['east', 'west'] : ['north', 'south']
+
+      doorwaysOf(shape).forEach((doorway) => expect(outTheEnds).toContain(doorway.facing))
+    }
+  })
+
+  it('puts the entry at one far end and the exit at the other', () => {
+    for (let i = 0; i < 200; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const along = shape.orientation === 'horizontal' ? 1 : 0
+      const last = (shape.orientation === 'horizontal' ? shape.mask[0].length : shape.mask.length) - 1
+      const ends = doorwaysOf(shape).map((doorway) => doorway.cell[along])
+
+      expect(ends.sort((a, b) => a - b)).toEqual([0, last])
+    }
+  })
+
+  // Which end you come in by is a roll, not a fixture - otherwise every corridor is walked
+  // in the same direction.
+  // Which *end*, not which facing: facing takes four values across the two orientations,
+  // so counting those would pass on a corridor that always entered from the same end.
+  it('rolls which end is the entry, in both orientations', () => {
+    const ends = { horizontal: new Set(), vertical: new Set() }
+
+    for (let i = 0; i < 400; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const along = shape.orientation === 'horizontal' ? 1 : 0
+
+      ends[shape.orientation].add(shape.entry.cell[along] === 0 ? 'start' : 'end')
+    }
+
+    expect(ends.horizontal).toEqual(new Set(['start', 'end']))
+    expect(ends.vertical).toEqual(new Set(['start', 'end']))
+  })
+
+  it('deals the two entry ends about evenly', () => {
+    let first = 0
+    const runs = 2000
+
+    for (let i = 0; i < runs; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const along = shape.orientation === 'horizontal' ? 1 : 0
+
+      if (shape.entry.cell[along] === 0) {
+        first += 1
+      }
+    }
+
+    expect(first / runs).toBeGreaterThan(0.44)
+    expect(first / runs).toBeLessThan(0.56)
+  })
+})
+
+// The point of these: the corridor declares doorways in the same shape the hand-authored
+// masks do, so shapeRoom's own helpers read them without a special case. If wallRun and
+// doorCells did not agree with the declared span, the corridor would be carrying numbers
+// that only its own code understood.
+describe('generateCorridorRoom - doorways through the shared helpers', () => {
+  it('declares a span that wallRun agrees with, the same invariant the masks hold to', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+
+      doorwaysOf(shape).forEach((doorway) =>
+        expect(wallRun(shape, doorway)).toHaveLength(doorway.span)
+      )
+    }
+  })
+
+  it('puts every doorway cell on a wall of the mask, not in the middle of the floor', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const walls = new Set(wallCells(shape).map((cell) => cell.join(',')))
+
+      doorwaysOf(shape).forEach((doorway) =>
+        expect(walls.has(doorway.cell.join(','))).toBe(true)
+      )
+    }
+  })
+
+  it('keeps every cell of a doorway run on the same end wall', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const along = shape.orientation === 'horizontal' ? 1 : 0
+
+      doorwaysOf(shape).forEach((doorway) =>
+        wallRun(shape, doorway).forEach((cell) =>
+          expect(cell[along]).toBe(doorway.cell[along])
+        )
+      )
+    }
+  })
+
+  it('seats exactly one door on an end, which is what a 5-cell run holds', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+
+      shape.exits.forEach((exit) => {
+        expect(doorCapacity(exit.span)).toBe(1)
+        expect(doorCells(shape, exit, 3)).toHaveLength(1)
+      })
+    }
+  })
+
+  it('lands its door pads on open floor', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const solid = solidGrid(shape)
+
+      shape.exits.forEach((exit) =>
+        doorCells(shape, exit, 1).forEach(([row, col]) => expect(solid[row][col]).toBe(false))
+      )
+    }
+  })
+})
+
+describe('doors and obstacles together', () => {
+  const doorSpots = (shape) => [
+    innerCell(shape.entry, DOOR_INSET),
+    ...shape.exits.flatMap((exit) => doorCells(shape, exit, 1))
+  ]
+
+  // The composition the obstacle step has to respect: a rock on the door pad is a door you
+  // cannot reach, and a rock on the spawn is a player standing inside one.
+  it('never buries a door pad or the entry under an obstacle', () => {
+    for (let i = 0; i < 300; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const { blocked } = generateCorridorObstacles(shape, Math.random)
+
+      doorSpots(shape).forEach(([row, col]) =>
+        expect(blocked[row][col], `${shape.orientation} ${row},${col}`).toBe(false)
+      )
+    }
+  })
+
+  it('always leaves a walk from the entry to the door', () => {
+    for (let i = 0; i < 300; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const { blocked } = generateCorridorObstacles(shape, Math.random)
+      const [entry, ...doors] = doorSpots(shape)
+
+      doors.forEach((door) =>
+        expect(connects(blocked, entry, door), shape.orientation).toBe(true)
+      )
+    }
+  })
+
+  it('still leaves that walk at both ends of the length range', () => {
+    ;[CORRIDOR_MIN_LENGTH, CORRIDOR_MAX_LENGTH].forEach((length) =>
+      ['horizontal', 'vertical'].forEach((orientation) => {
+        const shape = corridorOf(orientation, length)
+        const { blocked } = generateCorridorObstacles(shape, Math.random)
+        const [entry, ...doors] = doorSpots(shape)
+
+        doors.forEach((door) =>
+          expect(connects(blocked, entry, door), `${orientation} ${length}`).toBe(true)
+        )
+      })
+    )
+  })
+
+  it('still hits its coverage with the door cells held back', () => {
+    for (let i = 0; i < 100; i++) {
+      const shape = generateCorridorRoom(Math.random)
+      const walk = walkableCells(shape).length
+      const { coverage } = generateCorridorObstacles(shape, Math.random)
+
+      expect(coverage).toBeGreaterThanOrEqual(CORRIDOR_COVERAGE_MIN - 1 / walk)
+      expect(coverage).toBeLessThanOrEqual(CORRIDOR_COVERAGE_MAX + 1 / walk)
+    }
   })
 })

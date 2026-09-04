@@ -1,5 +1,6 @@
 import { reachesEveryOpenCell } from './obstacles.js'
-import { solidGrid } from './shapeRoom.js'
+import { DOOR_INSET, doorCells, innerCell, solidGrid } from './shapeRoom.js'
+import { doorCapacity } from './shapes.js'
 
 // Corridor rooms: long, narrow, straight through. Pure data like shapes.js, but generated
 // rather than hand-authored - a corridor has no silhouette worth drawing by hand, only a
@@ -27,8 +28,9 @@ export const CORRIDOR_MAX_LENGTH = 60
 const HORIZONTAL = 'horizontal'
 const VERTICAL = 'vertical'
 
-// Two rolls, in this order: the orientation, then the length. The order is part of the
-// contract - a test that wants a particular corridor queues its rolls against it.
+// Three rolls, in this order: the orientation, the length, then which end you come in by.
+// The order is part of the contract - a test that wants a particular corridor queues its
+// rolls against it.
 export function generateCorridorRoom(randomFn) {
   const orientation = randomFn() < 0.5 ? HORIZONTAL : VERTICAL
   const lengths = CORRIDOR_MAX_LENGTH - CORRIDOR_MIN_LENGTH + 1
@@ -42,11 +44,50 @@ export function generateCorridorRoom(randomFn) {
   const rows = orientation === HORIZONTAL ? across : long
   const cols = orientation === HORIZONTAL ? long : across
 
+  // A doorway at one far end, cut through the middle of that end wall. `span` is the whole
+  // end wall - all five cells of it, corners included - which is what wallRun measures
+  // walking out from the cell, and doorCapacity turns into exactly one door.
+  //
+  // Only the ends are ever offered. The long sides are 33 cells of unbroken wall on a
+  // middling corridor and would seat three doors each if anything let them; a corridor
+  // with a side door is a junction, not a corridor.
+  const middle = Math.floor(across / 2)
+  const endDoorway = (atStart) =>
+    orientation === HORIZONTAL
+      ? { cell: [middle, atStart ? 0 : long - 1], facing: atStart ? 'west' : 'east', span: across }
+      : { cell: [atStart ? 0 : long - 1, middle], facing: atStart ? 'north' : 'south', span: across }
+
+  // Which end is the way in is a roll: otherwise every corridor is walked the same way.
+  const entryAtStart = randomFn() < 0.5
+
   return {
     id: 'corridor',
     orientation,
-    mask: Array.from({ length: rows }, () => '#'.repeat(cols))
+    mask: Array.from({ length: rows }, () => '#'.repeat(cols)),
+    entry: endDoorway(entryAtStart),
+    // One exit, at the other end. An end wall seats a single door, and one of the two ends
+    // has to be the way in - so a corridor offers one door where a room offers two or
+    // three. openDoors already trusts the spots it gets back rather than the roll, so it
+    // needs no telling. A corridor is the bit between choices, not a choice.
+    exits: [endDoorway(!entryAtStart)]
   }
+}
+
+// The cells no obstacle may take: the door pads, and the spot the player lands on coming
+// in. One idea rather than two, because both exist for the same reason - a corridor has to
+// be enterable and exitable, and something you cannot stand on at either end fails that
+// however connected the rest of it is.
+//
+// This replaced an earlier rule that kept one cell of each *end column* open. That was a
+// proxy for "the door is reachable", and a loose one: the pad sits DOOR_INSET cells in
+// from the wall, so the end column could be solid without hurting anything, while a single
+// rock on the pad itself passed the check and buried the door. Reserving the cells that
+// actually matter is both simpler and stricter.
+export function corridorReservedCells(shape) {
+  return [
+    innerCell(shape.entry, DOOR_INSET),
+    ...shape.exits.flatMap((exit) => doorCells(shape, exit, doorCapacity(exit.span)))
+  ]
 }
 
 // How much of a corridor's walkable floor goes to obstacles. Well under a base room's
@@ -88,20 +129,16 @@ export function generateCorridorObstacles(shape, randomFn) {
     })
   )
 
-  const along = shape.orientation === 'horizontal' ? 1 : 0
-  const ends = open.map((cell) => cell[along])
-  const first = Math.min(...ends)
-  const last = Math.max(...ends)
-  const endIsOpen = (end) =>
-    open.some(([row, col]) => (along === 1 ? col : row) === end && !blocked[row][col])
-
   const rolled =
     CORRIDOR_COVERAGE_MIN + randomFn() * (CORRIDOR_COVERAGE_MAX - CORRIDOR_COVERAGE_MIN)
   // Rounded rather than floored: a 36-cell corridor cannot land on a tenth exactly, and
   // flooring would put its coverage under the floor of the band rather than beside it.
   const target = Math.round(open.length * rolled)
 
-  const candidates = [...open]
+  // The door pads and the landing spot are held back before anything is placed, so a
+  // corridor can always be walked into and out of.
+  const reserved = new Set(corridorReservedCells(shape).map((cell) => cell.join(',')))
+  const candidates = open.filter((cell) => !reserved.has(cell.join(',')))
   const shapes = []
   let rejected = 0
 
@@ -114,8 +151,7 @@ export function generateCorridorObstacles(shape, randomFn) {
     // Flooding from whatever is still open rather than from a fixed cell: a fixed one
     // could never be built on, which is a bias of its own on a floor this small.
     const start = open.find(([atRow, atCol]) => !blocked[atRow][atCol])
-    const stillWalkable =
-      start && endIsOpen(first) && endIsOpen(last) && reachesEveryOpenCell(blocked, start)
+    const stillWalkable = start && reachesEveryOpenCell(blocked, start)
 
     if (!stillWalkable) {
       blocked[row][col] = false
