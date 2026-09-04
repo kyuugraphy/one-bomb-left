@@ -175,11 +175,31 @@ const CORRIDOR_PLAN = {
 // into this corridor, and the room it named is still the room they are walking toward. A
 // badge here would be that promise made twice, or worse, a second choice that is not
 // really on offer. Plain slate, the colour of the walls rather than of any door type.
-// The ambush sting: how low it starts and how long it takes to fall an octave from there.
-// Low enough to sit under the music that does not exist yet, long enough to land as a
-// warning rather than a click.
-const AMBUSH_STING_HZ = 110
-const AMBUSH_STING_MS = 600
+// The ambush sting. A low A, and every voice above it drawn from the tritone - the
+// interval the medieval church is supposed to have called the devil in music - so the
+// chord cannot resolve and does not want to. Root, tritone, octave, tritone again an
+// octave up: an organ stack that is deliberately wrong.
+//
+// It was a plain octave drop first, which read as a UI error tone rather than as a
+// threat. What makes this one gothic is the dissonance and the length: it swells instead
+// of clicking, holds while the player reads the word, and sinks a little flat as it goes.
+const AMBUSH_STING_HZ = 55
+const AMBUSH_STING_MS = 1600
+// Ratios off the root. 1.4142 is the tritone; the pair of them an octave apart is what
+// gives the chord its howl rather than a hum.
+const AMBUSH_STING_VOICES = [1, 1.4142, 2, 2.8284]
+// Each voice is doubled a few cents out, so the two beat against each other. A single
+// clean oscillator per note sounds synthetic; a pair sounds like something breathing.
+const AMBUSH_STING_DETUNE = 0.006
+// Everything slides this far flat over the sting's length. A pitch that sags reads as
+// something failing rather than as a note being played.
+const AMBUSH_STING_SAG = 0.92
+
+// The freeze. The room stops while the word is on screen, so an ambush is a beat rather
+// than a line of text you read while being shot at.
+const AMBUSH_FREEZE_MS = 500
+const AMBUSH_TEXT_SIZE = '52px'
+const AMBUSH_SUBTEXT_SIZE = '20px'
 
 const CORRIDOR_EXIT_COLOR = 0xcbd5e1
 const CORRIDOR_EXIT_ALPHA = 0.22
@@ -593,6 +613,18 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    // Frozen on arrival in an ambushed room. Nothing reads input, nothing thinks and
+    // nothing shoots - including the nine enemies that were waiting - until the word has
+    // had its half second. Checked before the pause menu, so ESC cannot open one inside
+    // the freeze and leave two pauses fighting over physics.resume().
+    if (this.ambush) {
+      if (time < this.ambush.until) {
+        return
+      }
+
+      this.releaseAmbush()
+    }
+
     // The prompt owns the moment: physics is paused, so nothing moves, shoots or is hit
     // until the player has chosen. Only the HUD keeps painting.
     if (this.swap) {
@@ -660,9 +692,6 @@ export class PlayScene extends Phaser.Scene {
   // an entry line, which handed them a free look at the layout and a doorway to read it
   // from; now the fight starts where they are standing.
   populateRoom() {
-    // Before the branch: a shop returns from here without ever announcing anything.
-    this.announceTwist()
-
     if (this.roomType === 'shop') {
       this.openShop()
       return
@@ -684,6 +713,11 @@ export class PlayScene extends Phaser.Scene {
     }
 
     this.announceRoom()
+    // Last, and after the enemies exist, because the ambush freezes the room and the
+    // player should be looking at the room it froze. It used to run at the top of this
+    // method, so that a shop - which returns early - still announced; a twisted room is
+    // always a combat room, so it never takes that branch and the reason is gone.
+    this.announceTwist()
   }
 
   updateEnemies(time) {
@@ -1954,14 +1988,60 @@ ${advertised.tier}`, {
     }
 
     const was = DOOR_STYLE[this.twisted.type].label.toLowerCase()
+    const { width, height } = this.scale
 
-    this.notice(`AMBUSH - the ${was} was a trap`, '#f87171')
+    // Screen-centred and screen-pinned, not room-centred: a big room scrolls, and the
+    // word belongs in front of the player's eyes rather than somewhere in the level.
+    const word = this.add
+      .text(width / 2, height / 2 - 18, 'AMBUSH', {
+        fontFamily: 'monospace',
+        fontSize: AMBUSH_TEXT_SIZE,
+        color: '#f87171',
+        fontStyle: 'bold'
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(HUD_DEPTH + 1)
+
+    const line = this.add
+      .text(width / 2, height / 2 + 30, `the ${was} was a trap`, {
+        fontFamily: 'monospace',
+        fontSize: AMBUSH_SUBTEXT_SIZE,
+        color: '#fca5a5'
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(HUD_DEPTH + 1)
+
     this.playAmbushSting()
-    this.cameras.main.shake(260, 0.006)
+    this.cameras.main.shake(AMBUSH_FREEZE_MS, 0.006)
+    this.freezeForAmbush([word, line])
   }
 
-  // The project's only sound, and it carries no asset: two detuned sawtooths sliding down
-  // an octave through a closing filter, built from oscillators at the moment it plays.
+  // The room stops for as long as the word is up. Physics is paused rather than the scene,
+  // so the camera keeps shaking and the sting keeps sounding - the beat is the point, and a
+  // fully stopped scene would take the shake with it.
+  //
+  // The same trick the pause menu uses, and the same debt: cooldowns are wall-clock
+  // timestamps and the clock does not stop, so the frozen time is added back to every
+  // deadline on the way out. Without it the player would spend half a second of their fire
+  // cooldown, and every enemy half a second of theirs, standing still.
+  freezeForAmbush(objects) {
+    this.player.body.setVelocity(0, 0)
+    this.physics.pause()
+
+    this.ambush = { until: this.time.now + AMBUSH_FREEZE_MS, at: this.time.now, objects }
+  }
+
+  releaseAmbush() {
+    this.ambush.objects.forEach((object) => object.destroy())
+    this.shiftDeadlines(this.time.now - this.ambush.at)
+    this.ambush = null
+    this.physics.resume()
+  }
+
+  // The project's only sound, and it carries no asset: an organ chord built out of the
+  // tritone, swelling and then sagging flat over a second and a half.
   //
   // Synthesised rather than loaded because there is no audio pipeline here at all - no
   // files, no preload, no Phaser sound manager - and introducing one for a single sting
@@ -1972,7 +2052,7 @@ ${advertised.tier}`, {
   // Wrapped in a try/catch because audio is the one thing here that can fail for reasons
   // outside the game: a browser that blocks it, a tab with no output device, a context
   // suspended because nothing has been clicked yet. A missing sound must not take the
-  // ambush down with it - the message is the part that matters.
+  // ambush down with it - the word on screen is the part that matters.
   playAmbushSting() {
     try {
       const Ctx = window.AudioContext ?? window.webkitAudioContext
@@ -1990,36 +2070,41 @@ ${advertised.tier}`, {
       }
 
       const now = this.audio.currentTime
+      const seconds = AMBUSH_STING_MS / 1000
       const gain = this.audio.createGain()
       const filter = this.audio.createBiquadFilter()
 
+      // A resonant lowpass closing as it goes: the chord starts open and is swallowed.
+      // The resonance is what turns a filter sweep into a howl rather than a fade.
       filter.type = 'lowpass'
-      filter.frequency.setValueAtTime(1200, now)
-      filter.frequency.exponentialRampToValueAtTime(220, now + AMBUSH_STING_MS / 1000)
+      filter.Q.value = 7
+      filter.frequency.setValueAtTime(1400, now)
+      filter.frequency.exponentialRampToValueAtTime(160, now + seconds)
 
-      // Fast in, slow out: a growl that arrives on the same frame as the word AMBUSH.
+      // Swells rather than snaps. A fast attack reads as a button click; 90 ms of rise
+      // reads as something arriving, and the long tail lets it sit under the word.
       gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(0.22, now + 0.03)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + AMBUSH_STING_MS / 1000)
+      gain.gain.exponentialRampToValueAtTime(0.2, now + 0.09)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds)
 
       filter.connect(gain)
       gain.connect(this.audio.destination)
 
-      // Two of them, a few cents apart, so the pitches beat against each other instead of
-      // sounding like one clean tone. A clean tone reads as a UI chime; this should not.
-      ;[1, 1.012].forEach((detune) => {
-        const osc = this.audio.createOscillator()
+      AMBUSH_STING_VOICES.forEach((ratio) =>
+        [1 - AMBUSH_STING_DETUNE, 1 + AMBUSH_STING_DETUNE].forEach((detune) => {
+          const osc = this.audio.createOscillator()
+          const from = AMBUSH_STING_HZ * ratio * detune
 
-        osc.type = 'sawtooth'
-        osc.frequency.setValueAtTime(AMBUSH_STING_HZ * detune, now)
-        osc.frequency.exponentialRampToValueAtTime(
-          (AMBUSH_STING_HZ / 2) * detune,
-          now + AMBUSH_STING_MS / 1000
-        )
-        osc.connect(filter)
-        osc.start(now)
-        osc.stop(now + AMBUSH_STING_MS / 1000)
-      })
+          // Sawtooth for the harmonics an organ pipe has and a sine does not - the filter
+          // above is what shapes them into something with a body.
+          osc.type = 'sawtooth'
+          osc.frequency.setValueAtTime(from, now)
+          osc.frequency.exponentialRampToValueAtTime(from * AMBUSH_STING_SAG, now + seconds)
+          osc.connect(filter)
+          osc.start(now)
+          osc.stop(now + seconds)
+        })
+      )
     } catch {
       // no sound, and the ambush still reads
     }
