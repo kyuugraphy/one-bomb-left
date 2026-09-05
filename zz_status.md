@@ -4,6 +4,8 @@ _Last updated: 2026-09-04_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
+**Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
+
 ## Latest session (2026-09-04, fourth pass) — the ambush reads, and the shop stops selling nothing
 Playtest feedback, three rounds of it.
 
@@ -143,12 +145,12 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
 | `currency.js` | `addExp`, `spendExp` | `exp` |
-| `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `priceOf`, `canAfford`, `sellableItems`, `shelfLabelFor`, `rollShopStock` | none - rolls, prices, what may be sold, and what the shelf gives away |
+| `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `REFILL_WEIGHT`, `priceOf`, `canAfford`, `sellableItems`, `shelfLabelFor`, `rollShopStock`, `purchaseBlockedReason` | none - rolls, prices, what may be sold, what the shelf gives away, and why a purchase cannot land |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP`, `rollRoomDrop`, `DEBUFF_DROP_SHARE`, `DEBUFF_DROP`, `CLEAN_DROP` | none - rolls whether a kill leaves half a heart, and what clearing a room pays |
-| `doors.js` | `rollDoorCount`, `rollDoors`, `roomPlanFor`, `REWARD_TYPES`, `TYPE_WEIGHTS`, `ENTRANCE_DOOR`, `ENTRANCE_PLAN`, `DOOR_STYLE`, `TIER_GLOW`, `rollTwist`, `rollTwistCap`, `mustStaySafe`, `canTwist`, `TWIST_CHANCE`, `TWISTED_PLAN` | none - rolls the telegraph, the room plan behind it, and whether that room twists |
+| `doors.js` | `rollDoorCount`, `rollDoors`, `roomPlanFor`, `REWARD_TYPES`, `TYPE_WEIGHTS`, `TIERS`, `ENTRANCE_DOOR`, `ENTRANCE_ENEMIES`, `ENTRANCE_PLAN`, `DOOR_STYLE`, `TIER_GLOW`, `rollTwist`, `rollTwistCap`, `mustStaySafe`, `canTwist`, `TWISTABLE_TYPES`, `TWIST_CHANCE`, `MAX_TWIST_CAP`, `TWISTED_PLAN`, `TWIST_LINES`, `pickTwistLine` | none - rolls the telegraph, the room plan behind it, whether that room twists, and what the ambush says |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `reachesEveryOpenCell`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
-| `run.js` | `freshGameState`, `roomFor`, `recordDoorOutcome` | owns `gameState`'s shape; turns a restart payload into the room to build; books what a taken door turned out to be |
+| `run.js` | `freshGameState`, `roomFor`, `recordTwist` | owns `gameState`'s shape; turns a restart payload into the room to build; books whether the room a taken door led to turned hostile |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |

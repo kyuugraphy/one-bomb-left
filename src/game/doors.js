@@ -43,9 +43,7 @@ const REPEATABLE = 'combat'
 // fight" was a strategy the draw handed out for free, and a puzzle room pays nothing but
 // still counts as a room. Double weight puts combat back near where the four-type draw
 // had it while leaving the shop-and-puzzle hand possible, just uncommon.
-const TYPE_WEIGHTS = { combat: 2, shop: 1, puzzle: 1 }
-
-export { TYPE_WEIGHTS }
+export const TYPE_WEIGHTS = { combat: 2, shop: 1, puzzle: 1 }
 
 export const TIERS = ['easy', 'medium', 'hard']
 
