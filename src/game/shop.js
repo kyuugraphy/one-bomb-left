@@ -49,10 +49,23 @@ const STOCKED_REFILLS = [HP_REFILL]
 // two and a refill, or a refill and two items.
 export const SHELF_SIZE = 3
 
-// What a refill is worth against a catalogue item in that draw. One is the neutral choice:
-// an item the player has never held also draws at 1, and an item they have stacked draws
-// lower. Raise it if healing turns out to be too scarce - see the note in zz_status.md.
-export const REFILL_WEIGHT = 1
+// What a refill is worth against a catalogue item in that draw. One would be the neutral
+// figure: an item the player has never held also draws at 1, and one they have stacked
+// draws lower.
+//
+// **It is 0.9 to undo an accident, not to make healing scarcer.** Holding the Bomb Refill
+// back left the HP Refill as the only refill in the pool, and a draw with one fewer
+// competitor hands the survivor a larger share: it went from landing on 24.89% of shelves
+// to 27.26% without anybody choosing that. The HP Refill is the game's only full heal, so
+// a quiet 2.4-point buff to how often it appears is a real difficulty change made by
+// accident. 0.9 puts it back at 24.98%.
+//
+// Measured over 300,000 shelves per figure, against the real rollShopStock and the real
+// pool PlayScene.shopPool() builds. shop.test.js pins the rate so it cannot drift back.
+//
+// If the Bomb Refill ever returns to STOCKED_REFILLS, this goes back to 1 with it - the
+// two changes are one change, and leaving 0.9 behind would halve healing by omission.
+export const REFILL_WEIGHT = 0.9
 
 // What a shop is allowed to sell. Debuffs are excluded outright: they are what a risky
 // room pays you for surviving it, not merchandise, and a shop that sold you Thin Skin

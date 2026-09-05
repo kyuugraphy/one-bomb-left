@@ -706,7 +706,17 @@ Verified on a live shelf: an indigo triangle at 7 EXP, an orange circle at 10, a
 
 Fixed on the shelf rather than at the exit gate on purpose: a gate that ignored bombs would still leave the shop selling one. Selling a thing that does nothing is the defect; the stuck-feeling door was only how it got noticed. `BOMB_REFILL` stays exported and priced, so the day bombs are wired this is one line. **The figures below predate that change** and counted both refills.
 
-**Every slot is drawn**, without replacement, from one pool: the catalogue on its ownership weighting, plus the stocked refills at `REFILL_WEIGHT = 1`. One is the neutral figure — an item the player has never held also draws at 1, and one they have stacked draws lower. Stocking both refills unconditionally left exactly one slot doing any varying: two thirds of every shelf was the same two boxes in the same two places, and the only decision was whether to take the item.
+**Every slot is drawn**, without replacement, from one pool: the catalogue on its ownership weighting, plus the stocked refills at `REFILL_WEIGHT = 0.9`.
+
+**0.9 rather than the neutral 1, to undo an accident.** Removing the Bomb Refill left the HP Refill as the only refill in the draw, and one fewer competitor is a larger share for the survivor: it went from **24.89%** of shelves to **27.26%** without anyone choosing that. The HP Refill is the game's only full heal, so a quiet 2.4-point buff to how often it appears is a difficulty change made by omission.
+
+| | HP Refill on a shelf |
+|---|---|
+| both refills, weight 1 (the original) | 24.89% |
+| HP alone, weight 1 (the accident) | 27.26% |
+| HP alone, **weight 0.9** | **25.04%** |
+
+300,000 shelves per figure, against the real `rollShopStock` and the real pool `shopPool()` builds, with the baseline re-measured rather than taken from the older note below. `shop.test.js` pins the rate, because a rate that drifts silently is exactly how it moved in the first place. **If the Bomb Refill returns to `STOCKED_REFILLS`, this goes back to 1 with it** - the two are one change, and leaving 0.9 behind would cut healing by omission the same way it was raised. One is the neutral figure — an item the player has never held also draws at 1, and one they have stacked draws lower. Stocking both refills unconditionally left exactly one slot doing any varying: two thirds of every shelf was the same two boxes in the same two places, and the only decision was whether to take the item.
 
 Measured over 4,000 shelves against the scene's own pool (10 sellable items, empty rack):
 
@@ -774,7 +784,6 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
-- **The HP Refill is now the only refill, so it turns up more often than the measured figures say.** Those numbers were taken when both refills were in the draw. It is also still the game's only full heal, so removing its competitor nudged the item economy in a direction nobody chose. `REFILL_WEIGHT` is the knob if healing starts feeling too easy to come by.
 - **`bombs.js` is unwired, and now visibly so.** `useBomb` and `refillBomb` have no caller, `bombCount` only increments, and the HUD prints a number that nothing can spend. The shop no longer sells bombs because of it. This is the project's name and it is still not in the game.
 - **A 3.5 s freeze every ambush has no skip.** Rare enough not to matter at `TWIST_CHANCE = 0.01`, but on a second or third encounter the player has already read the line and is waiting out an animation. Dismiss-on-keypress is the fix if it starts to grate; deliberately not built, because a skippable freeze needs input handling inside a state whose whole point is that input is dead.
 - **The ambush panel is a flat rectangle at 0.3 alpha.** It dims what is behind it by 30%, which is enough to read over but not enough to hide a red enemy sitting directly behind a red letter. Raising `AMBUSH_PANEL_ALPHA` trades readability against seeing the room you have been dropped into. See `zz_todo.md` for the PNG window meant to replace it.

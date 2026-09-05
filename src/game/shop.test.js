@@ -5,6 +5,7 @@ import { ITEMS, getItem, itemsFrom } from './items.js'
 import {
   BOMB_REFILL,
   HP_REFILL,
+  REFILL_WEIGHT,
   SHELF_SIZE,
   SHOP_PRICES,
   canAfford,
@@ -405,5 +406,41 @@ describe('what the shop will not sell yet', () => {
   it('keeps the Bomb Refill defined and priced, ready for the day bombs work', () => {
     expect(BOMB_REFILL.kind).toBe('bomb_refill')
     expect(priceOf(BOMB_REFILL)).toBeGreaterThan(0)
+  })
+})
+
+// The HP Refill is the game's only full heal, so how often it turns up is a difficulty
+// setting whether or not anyone means it to be. Holding the Bomb Refill back moved it
+// without anyone choosing to - one fewer competitor in the draw is a larger share for the
+// survivor - so REFILL_WEIGHT was lowered to put it back. This pins the result, because a
+// rate that drifts silently is exactly how it moved in the first place.
+describe('how often a shelf carries the HP Refill', () => {
+  const shelfPool = () => {
+    const inventory = createInventory()
+
+    return weightedPassivePool(inventory, sellableItems(ITEMS, inventory))
+  }
+
+  it('lands within a point of the 24.9% it had when both refills competed', () => {
+    const pool = shelfPool()
+    const shelves = 40000
+    let seen = 0
+
+    for (let i = 0; i < shelves; i++) {
+      if (rollShopStock(pool, Math.random).some((entry) => entry.kind === 'hp_refill')) {
+        seen += 1
+      }
+    }
+
+    const rate = (100 * seen) / shelves
+
+    expect(rate).toBeGreaterThan(23.9)
+    expect(rate).toBeLessThan(25.9)
+  })
+
+  // The weight is the reason, and it is below neutral on purpose - see shop.js.
+  it('draws a refill slightly under a never-held catalogue item', () => {
+    expect(REFILL_WEIGHT).toBe(0.9)
+    expect(REFILL_WEIGHT).toBeLessThan(1)
   })
 })
