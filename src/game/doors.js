@@ -127,23 +127,17 @@ export function assignTwistDispositions(doors, gameState, policy = NORMAL_DOORS)
       return { ...door, disposition: TWIST_NEVER }
     }
 
-    if (door.type === 'shop') {
-      gameState.shopsSeen += 1
+    // **Shop and puzzle share one counter and one trap.** They used to have one each, which
+    // put two ambushes on every floor and gave each trap only its own type's offers to hide
+    // among - so both landed early. Counted together, the floor's single trap can be any of
+    // the five-odd twistable doors it offers rather than one of two.
+    if (door.type === 'shop' || door.type === 'puzzle') {
+      gameState.twistablesSeen += 1
 
       return {
         ...door,
         disposition:
-          gameState.shopsSeen === gameState.shopTrapOrdinal ? TWIST_TRAP : TWIST_ROLLS
-      }
-    }
-
-    if (door.type === 'puzzle') {
-      gameState.puzzlesSeen += 1
-
-      return {
-        ...door,
-        disposition:
-          gameState.puzzlesSeen === gameState.puzzleTrapOrdinal ? TWIST_TRAP : TWIST_ROLLS
+          gameState.twistablesSeen === gameState.trapOrdinal ? TWIST_TRAP : TWIST_ROLLS
       }
     }
 

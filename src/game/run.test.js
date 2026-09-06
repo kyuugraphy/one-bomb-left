@@ -416,34 +416,27 @@ describe('the floor a run is on', () => {
     expect(state.roomOnFloor).toBe(1)
   })
 
-  // Two traps per floor, rolled independently: one among the ordinary shop doors and one
-  // among the puzzle doors. Separate ordinals and separate counters, because a shared one
-  // would tie the two together - the puzzle trap would land wherever the shop trap did.
-  it('rolls the floor a trap for shops and another for puzzles', () => {
+  // **One trap per floor**, over the combined stream of shop and puzzle doors. It was two -
+  // one per type - which put two ambushes on a floor and gave each only its own type's
+  // offers to hide among, so both landed early.
+  it('rolls the floor a single trap, and starts having seen nothing', () => {
     for (let i = 0; i < 500; i++) {
       const state = freshGameState()
 
-      ;[state.shopTrapOrdinal, state.puzzleTrapOrdinal].forEach((ordinal) => {
-        expect(ordinal).toBeGreaterThanOrEqual(1)
-        expect(ordinal).toBeLessThanOrEqual(TRAP_ORDINAL_MAX(FLOOR_ONE_ROOMS))
-      })
-
-      expect(state.shopsSeen).toBe(0)
-      expect(state.puzzlesSeen).toBe(0)
+      expect(state.trapOrdinal).toBeGreaterThanOrEqual(1)
+      expect(state.trapOrdinal).toBeLessThanOrEqual(TRAP_ORDINAL_MAX(FLOOR_ONE_ROOMS))
+      expect(state.twistablesSeen).toBe(0)
     }
   })
 
-  it('rolls the two ordinals independently of each other', () => {
-    const pairs = new Set()
+  it('reaches every slot the floor has, so the trap is not stuck near the start', () => {
+    const seen = new Set()
 
-    for (let i = 0; i < 2000; i++) {
-      const state = freshGameState()
-
-      pairs.add(state.shopTrapOrdinal + ',' + state.puzzleTrapOrdinal)
+    for (let i = 0; i < 5000; i++) {
+      seen.add(freshGameState().trapOrdinal)
     }
 
-    // a 7-room floor has ordinals 1-2, so all four combinations must appear
-    expect(pairs.size).toBe(4)
+    expect(seen.size).toBe(TRAP_ORDINAL_MAX(FLOOR_ONE_ROOMS))
   })
 
   // The stand-in is retired. corridorDoors used to be rolled against a made-up floor of 10
@@ -480,20 +473,16 @@ describe('advanceFloor', () => {
     expect(state.roomOnFloor).toBe(1)
   })
 
-  it('deals the new floor both traps, and forgets what the last one had seen', () => {
+  it('deals the new floor its own trap, and forgets what the last one had seen', () => {
     const state = freshGameState()
 
-    state.shopsSeen = 4
-    state.puzzlesSeen = 3
+    state.twistablesSeen = 7
 
     advanceFloor(state, Math.random)
 
-    expect(state.shopsSeen).toBe(0)
-    expect(state.puzzlesSeen).toBe(0)
-    ;[state.shopTrapOrdinal, state.puzzleTrapOrdinal].forEach((ordinal) => {
-      expect(ordinal).toBeGreaterThanOrEqual(1)
-      expect(ordinal).toBeLessThanOrEqual(TRAP_ORDINAL_MAX(state.floorRooms))
-    })
+    expect(state.twistablesSeen).toBe(0)
+    expect(state.trapOrdinal).toBeGreaterThanOrEqual(1)
+    expect(state.trapOrdinal).toBeLessThanOrEqual(TRAP_ORDINAL_MAX(state.floorRooms))
   })
 
   // Both halves matter. Re-rolling without resetting doorsTaken would index the new list

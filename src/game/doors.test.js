@@ -771,40 +771,45 @@ describe('assignTwistDispositions', () => {
 
     assignTwistDispositions(doorsOf('shop', 'combat'), state, SHOP_GUARANTEED)
 
-    expect(state.shopsSeen).toBe(0)
+    expect(state.twistablesSeen).toBe(0)
   })
 
-  it('counts ordinary shop and puzzle doors as they are offered', () => {
+  // **One counter for both.** A shop and a puzzle are the same kind of thing to the trap:
+  // a door that might turn out to be an ambush. Counting them separately gave the floor two
+  // traps and gave each of them only its own type's doors to hide among.
+  it('counts shop and puzzle doors together as they are offered', () => {
     const state = freshGameState()
 
     assignTwistDispositions(doorsOf('shop', 'puzzle'), state, NORMAL_DOORS)
 
-    expect(state.shopsSeen).toBe(1)
-    expect(state.puzzlesSeen).toBe(1)
+    expect(state.twistablesSeen).toBe(2)
   })
 
-  it('marks the ordinal-th ordinary shop as the floor trap', () => {
+  it('marks the ordinal-th twistable door as the floor trap, whichever kind it is', () => {
     const state = freshGameState()
 
-    state.shopTrapOrdinal = 2
+    state.trapOrdinal = 3
 
-    const first = assignTwistDispositions(doorsOf('shop', 'combat'), state, NORMAL_DOORS)
-    const second = assignTwistDispositions(doorsOf('shop', 'combat'), state, NORMAL_DOORS)
+    const first = assignTwistDispositions(doorsOf('shop', 'puzzle'), state, NORMAL_DOORS)
+    const second = assignTwistDispositions(doorsOf('puzzle', 'combat'), state, NORMAL_DOORS)
 
-    expect(first[0].disposition).toBe(TWIST_ROLLS)
+    expect(first.map((door) => door.disposition)).toEqual([TWIST_ROLLS, TWIST_ROLLS])
     expect(second[0].disposition).toBe(TWIST_TRAP)
   })
 
-  it('marks the ordinal-th puzzle as the floor trap, independently of shops', () => {
-    const state = freshGameState()
+  it('can put the trap on a shop or on a puzzle, depending only on the order offered', () => {
+    const onShop = freshGameState()
+    const onPuzzle = freshGameState()
 
-    state.puzzleTrapOrdinal = 1
-    state.shopTrapOrdinal = 2
+    onShop.trapOrdinal = 1
+    onPuzzle.trapOrdinal = 1
 
-    const tagged = assignTwistDispositions(doorsOf('puzzle', 'shop'), state, NORMAL_DOORS)
-
-    expect(tagged[0].disposition).toBe(TWIST_TRAP)
-    expect(tagged[1].disposition).toBe(TWIST_ROLLS)
+    expect(assignTwistDispositions(doorsOf('shop'), onShop, NORMAL_DOORS)[0].disposition).toBe(
+      TWIST_TRAP
+    )
+    expect(assignTwistDispositions(doorsOf('puzzle'), onPuzzle, NORMAL_DOORS)[0].disposition).toBe(
+      TWIST_TRAP
+    )
   })
 
   it('leaves combat and boss doors on the ordinary rules', () => {
@@ -812,19 +817,19 @@ describe('assignTwistDispositions', () => {
     const tagged = assignTwistDispositions(doorsOf('combat', 'boss'), state, NORMAL_DOORS)
 
     tagged.forEach((door) => expect(door.disposition).toBe(TWIST_ROLLS))
-    expect(state.shopsSeen).toBe(0)
-    expect(state.puzzlesSeen).toBe(0)
+    expect(state.twistablesSeen).toBe(0)
   })
 
-  it('tags at most one trap of each kind per floor', () => {
+  // One ambush per floor, not one per room type.
+  it('tags exactly one trap per floor', () => {
     const state = freshGameState()
 
-    state.shopTrapOrdinal = 1
+    state.trapOrdinal = 1
 
     const traps = []
 
     for (let room = 0; room < 6; room++) {
-      assignTwistDispositions(doorsOf('shop'), state, NORMAL_DOORS).forEach((door) => {
+      assignTwistDispositions(doorsOf('shop', 'puzzle'), state, NORMAL_DOORS).forEach((door) => {
         if (door.disposition === TWIST_TRAP) traps.push(door)
       })
     }

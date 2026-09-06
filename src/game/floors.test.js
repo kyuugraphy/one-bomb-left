@@ -199,10 +199,14 @@ describe('doorPolicyFor', () => {
 // exactly one: exactly one is not placeable without pre-rolling every room's doors, which
 // would mean rebuilding when doors are decided at all.
 describe('rollTrapOrdinal', () => {
-  it('scales its range with the floor, so the trap is not always in the same slot', () => {
-    expect(TRAP_ORDINAL_MAX(7)).toBe(2)
-    expect(TRAP_ORDINAL_MAX(11)).toBe(3)
-    expect(TRAP_ORDINAL_MAX(15)).toBe(4)
+  // Wide enough to land anywhere on the floor. It was ceil(rooms/4) - two slots on a
+  // 7-room floor - which was tuned for how often the trap got placed and front-loaded it
+  // badly: **54% of traps fired in room 1**, because the first twistable door is itself
+  // usually in room 1. Playtest caught it as "ambushed on the second room, almost always".
+  it('spans nearly the whole floor, so the trap is not always early', () => {
+    expect(TRAP_ORDINAL_MAX(7)).toBe(5)
+    expect(TRAP_ORDINAL_MAX(11)).toBe(9)
+    expect(TRAP_ORDINAL_MAX(15)).toBe(13)
   })
 
   it('never picks the zeroth or a negative shop', () => {
@@ -245,12 +249,14 @@ describe('rollTrapOrdinal', () => {
     expect(calls).toBe(1)
   })
 
-  // A short floor with a wide ordinal range would mostly miss, so the range is deliberately
-  // below the number of ordinary shop doors a floor of that length tends to offer.
-  it('keeps its range under what a floor of that length actually offers', () => {
-    // measured means: 2.15 ordinary shop doors on a 7-room floor, 4.30 on 11, 6.46 on 15
-    expect(TRAP_ORDINAL_MAX(7)).toBeLessThanOrEqual(2)
-    expect(TRAP_ORDINAL_MAX(11)).toBeLessThanOrEqual(4)
-    expect(TRAP_ORDINAL_MAX(15)).toBeLessThanOrEqual(6)
+  // The trade the width buys. A range this wide sometimes names a slot the floor never
+  // reaches, so the trap is not placed at all - measured at 90% placed on a 7-room floor
+  // and 94% on an 11-room one, against 100% for the narrow range that caused the bias.
+  // Losing one floor in ten is the price of the other nine being unpredictable.
+  it('stays within the rooms that can actually offer a door', () => {
+    ;[7, 9, 11, 15].forEach((rooms) => {
+      expect(TRAP_ORDINAL_MAX(rooms)).toBeGreaterThan(0)
+      expect(TRAP_ORDINAL_MAX(rooms)).toBeLessThan(rooms)
+    })
   })
 })

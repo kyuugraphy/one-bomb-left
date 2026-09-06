@@ -6,7 +6,18 @@ _Last updated: 2026-09-06_
 
 **Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
 
-## Latest session (2026-09-06, third pass) — the player has a face
+## Latest session (2026-09-06, fourth pass) — boss arenas, shop statues, and one trap a floor
+Pure logic only in what is committed here; the scene wiring for it is held back — see the note at the end.
+
+**Boss arenas.** A boss room is generated fresh every time rather than drawn from a set: a symmetry is rolled, obstacles are mirrored into it, and the way in and the middle are held open. `arena.js`, 30 tests.
+
+**One trap a floor, spread across it.** Playtest caught the ambush landing in room 1 or 2 almost every time. It was two traps - one for shops, one for puzzles - each hiding among only its own type's doors, in a range two slots wide. Now one trap over both, in a range spanning the floor: **room 1 went from 54% to 24%**.
+
+**The shop is watched.** Four statues stand in every shop from the moment the player walks in. Buying wakes 0-4 of them and shuts the doors until they are down; buying nothing costs nothing, and the doors were never shut in the first place.
+
+**A smaller hitbox.** The player is drawn at 32 px and collides at 22.
+
+## Previous session (2026-09-06, third pass) — the player has a face
 The green block is gone. The player is **`av_head.png`**, drawn at **128 px** — four times the 32 px block it replaces, and about twice the height of a 56 px wall tile. Big enough that the portrait reads as a portrait rather than a smudge, which was the whole point of trying it.
 
 **The art ships without an alpha channel.** `av_head.png` is RGB: the head sits on an opaque black field, so drawing it straight gives a black square with a face in it. `keyOutBlack()` makes a keyed copy once at load — anything darker than a threshold of 40 becomes transparent — and hands back the new key. The threshold is a range rather than an exact match on `0x000000` because the art is anti-aliased against the black, and it is low enough that the near-black in the hair survives. Guarded on the texture key, because `create()` runs again on every room.
@@ -201,6 +212,8 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `reachesEveryOpenCell`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
 | `run.js` | `freshGameState`, `roomFor`, `recordTwist`, `advanceFloor` | owns `gameState`'s shape; turns a restart payload into the room to build; books whether a room turned hostile; re-deals the floor at a boundary |
+| `arena.js` | `ARENA_COLS`, `ARENA_ROWS`, `SYMMETRY_TYPES`, `MIRROR_X`, `MIRROR_Y`, `ROTATE_180`, `rollSymmetry`, `imagesOf`, `isSymmetric`, `arenaEntry`, `arenaBossSpawn`, `generateArenaObstacles`, `ARENA_COVERAGE_MIN`, `ARENA_COVERAGE_MAX`, `ARENA_ROCK_MAX_CELLS`, `BOSS_FOOTPRINT_ROWS`, `BOSS_FOOTPRINT_COLS` | none - rolls a whole boss arena, RNG injected |
+| `outline.js` | `traceOutline`, `jitterPoints` | none - traces a clump's boundary into a closed loop and nudges it off the grid. **Not wired in**; see the gaps |
 | `floors.js` | `floorSize`, `FLOOR_BANDS`, `FLOOR_ONE_ROOMS`, `midFloorRoom`, `preBossRoom`, `shopCheckpoints`, `doorPolicyFor`, `BOSS_DOOR`, `SHOP_GUARANTEED`, `NORMAL_DOORS`, `TRAP_ORDINAL_MAX`, `rollTrapOrdinal` | none - how long a floor is, which of its rooms are special, and where its traps go |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
@@ -551,6 +564,52 @@ Verified on the real output: 672 px at the shortest and 3360 px at the longest, 
 
 **Obstacles and doors are done** — see the two sections below.
 
+### Boss arenas (`arena.js`) — generated, symmetric, not stored
+A boss room is the base room's 24x15, not one of the big shapes: a boss fight wants a space you can see all of at once. What makes it an arena is that it is **built around a symmetry**, and generated fresh every time one is needed - closer to how a corridor is rolled than to how L/Z/T/G are stored.
+
+**Three symmetries, and 90 degrees is not one of them.** A quarter turn maps (row, col) to (col, rows-1-row), so its image needs as many rows as the room has columns - it fits a square and nothing else, and the arena is 24 wide by 15 tall. What is left all map the rectangle onto itself: mirror left/right, mirror top/bottom, and a half turn. The last one used is remembered on the run, so two arenas running are never the same shape.
+
+**Obstacles are placed by orbit, not by cell.** A cell and its reflections go down together and the room is checked for connectivity once afterwards, because a mirrored pair can pinch a channel that neither half would close on its own - testing the halves separately is the bug where each passes on its own merits and the two together wall the arena in half. A rejected orbit is dropped whole; half an orbit left behind is an asymmetric arena.
+
+Measured on a 24x15 arena, mirroring costs about 1.3-1.6x the rejection rate of placing singly - 1.4% against 1.0% at 15% coverage. **Shape size matters far more than mirroring does**: 1.5% mirrored at one cell, 5.7% at four, 13.4% at eight. Clumps are capped at four, which is where an arena still reads as pillars and cover rather than as terrain.
+
+| | |
+|---|---|
+| coverage | 10-18%, under a combat room's third |
+| clump size | 1-4 cells, mirrored whole |
+| entry | on the axis, chosen by symmetry |
+| boss | a 3x2 block straddling the middle |
+
+**The entry sits on the symmetry**, because an arena that is symmetric everywhere except its doorway is asymmetric in the one place the player is guaranteed to be looking when they arrive. Left/right mirroring comes in at the bottom middle, which 24 columns puts *between* cells - so the doorway is that pair and the player walks in between them. Top/bottom mirroring comes in at the left middle, which 15 rows puts squarely on row 7. A half turn keeps the bottom entry and holds its image open at the top as a matching alcove.
+
+**The boss stands in the middle, which is not a cell.** The arena's true centre is (7, 11.5). A 3x2 block straddling it is a closed orbit under all three symmetries - left/right swaps its columns, top/bottom swaps its outer rows, a half turn does both - so reserving it leaves the arena symmetric where reserving one off-centre cell would not. Three by two while the boss is a stub; that is the number to grow when it has a real size.
+
+### The floor's trap, and where it lands
+One ordinary shop **or** puzzle door per floor is a certain ambush rather than a 1% risk. Which one is rolled at floor generation, before anyone knows how many there will be - doors are rolled room by room as the player walks - so the trap is "the Nth twistable door of this floor", and if the floor never offers N of them, no trap is placed. **At most one per floor, not exactly one.**
+
+**It was two traps in a range two slots wide, and that was badly wrong.** A shop trap and a puzzle trap, rolled separately, each hiding among only its own type's doors; and `TRAP_ORDINAL_MAX` was `ceil(rooms/4)`, tuned for how often a trap got placed. The result was an ambush the player could set their watch by - playtest reported it as "the second room, almost always", and the measurement agreed:
+
+| | before | after |
+|---|---|---|
+| traps per floor | 2 | 0.90 |
+| lands in room 1 | **54%** | **24%** |
+| room 2 | 32% | 24% |
+| room 3 | 10% | 23% |
+| rooms 4-6 | ~4% | 28% |
+
+One trap over the combined stream, in a range of `rooms - 2`. The cost is that a wide range can name a slot the floor never reaches: **90% of floors get a trap instead of 100%**. One floor in ten without an ambush is the price of the other nine being unpredictable, and unpredictability is the whole point of a trap.
+
+### The shop is watched
+**Four statues, always**, standing in every shop from the moment the player walks in - stone-coloured, inert, with no body and no behaviour. They are visible before the decision so the cost of buying is on the table rather than sprung afterwards.
+
+**Buying wakes 0-4 of them**, rolled per purchase, and which ones is a shuffle rather than the first N - taking the first N would wake the same corner of the room every time and turn the rest into scenery. A woken statue is replaced by an enemy standing exactly where it stood, so the fight starts from the arrangement the player has been looking at.
+
+**Waking none leaves the doors alone entirely.** Closing them for a frame and reopening on the next would be a flicker claiming something happened when nothing did.
+
+**A shop never holds its exit shut any more.** `shopIsDone()` returns true, always: the doors are open on arrival and buying nothing is a real way to leave. It used to hold the exit until the visit was "over", and that gate had already been a softlock twice - affordable is not buyable, and a bomb refill is not something worth buying. Opening the doors outright deletes the class of problem rather than patching its next instance. What closes them is a purchase, and only until the statues it woke are down.
+
+**Reopening rebuilds the roll rather than re-rolling.** `openDoors` runs `assignTwistDispositions`, which advances the floor's twistable counter - a second roll in one room would drift the floor's trap ordinal by a door. The doors that come back are the ones the player was looking at before they bought.
+
 ### A room narrower than the viewport
 A vertical corridor drew hard against the **left** of the screen whatever the player did, and a horizontal one against the **top**.
 
@@ -843,6 +902,9 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
+- **`outline.js` is finished and not wired in.** It traces a clump's boundary into a closed loop and nudges every corner off the grid, so rocks and pits could be drawn as organic shapes rather than as unions of 56 px squares. Drawing that needs masking, and **Phaser 4 removed geometry masks from the WebGL renderer** - `setMask` warns and does nothing. Its replacement, `filters.internal.addMask`, did not clip in the shape this needs; `Earcut` and `Mesh` exist for a mask-free textured polygon, but `addVertices` is not in the build, so that API has moved too. The module is tested and correct; only the rendering path is open. See `zz_todo.md`.
+- **A shop's tier no longer means anything.** `ROOM_PLANS` still says a shop holds 0, 2 or 3 enemies by its door's glow, and that is not what a shop does: every shop has four statues and wakes 0-4 of them. The glow on a gold door is now decoration.
+- **The arena is generated but the boss room is still a stub**, so an arena is currently a well-composed empty room. `arenaBossPoint()` marks where a boss goes and nothing spawns there.
 - **The boss room is an empty stub.** It has no enemies and clears on the frame it opens; beating it means walking into it. It exists to prove the trigger and the floor transition, and it should eventually open a **cutscene and a memory unlock** — deliberately not stubbed, because a half-built cutscene hook is harder to replace than a plain door. See `zz_todo.md`.
 - **A run still has no end.** Floors keep dealing past floor 7 on the floors-3+ rule, so a run chains for as long as the player survives. A victory condition is its own piece of work.
 - **The trap mechanic is bounded by the twist cap, not by itself.** A run gets roughly its `twistCap` in ambushes however many traps are placed, so the two trap systems decide *where* an ambush can happen rather than *how many* there are. Measured: traps placed on 94.6% / 97.7% of floors, entered ~40% of the time, and **about three fifths of entered traps fizzle**. Front-loading is severe — the first trap a run meets fires 79.6% of the time, the sixth 1.2%. 20.3% of runs see no ambush at all, almost exactly the runs dealt `twistCap: 0`.

@@ -54,14 +54,15 @@ export function freshGameState(randomFn = Math.random) {
     floorNumber: 1,
     floorRooms,
     roomOnFloor: 1,
-    // Which ordinary shop door and which puzzle door of this floor are the traps, and how
-    // many of each have been offered so far. Two ordinals rolled independently, because a
-    // shared one would tie them together and land both traps at the same position on the
-    // floor. All four belong to the floor and are re-dealt with it.
-    shopTrapOrdinal: rollTrapOrdinal(floorRooms, randomFn),
-    puzzleTrapOrdinal: rollTrapOrdinal(floorRooms, randomFn),
-    shopsSeen: 0,
-    puzzlesSeen: 0,
+    // **One trap per floor, across both kinds of twistable door.** It was two - a shop trap
+    // and a puzzle trap, rolled independently - which put two ambushes on every floor and
+    // gave each trap only its own type's offers to hide among, so both landed early. One
+    // trap over the combined stream halves the encounters and lets the single ordinal
+    // spread across everything the floor offers.
+    //
+    // twistablesSeen counts shop and puzzle doors together, in the order they are offered.
+    trapOrdinal: rollTrapOrdinal(floorRooms, randomFn),
+    twistablesSeen: 0,
     // Which door-takings of this floor have a corridor behind them, rolled once at the
     // start. See rollCorridorDoors for why up front rather than per door.
     corridorDoors: rollCorridorDoors(floorRooms, randomFn),
@@ -107,16 +108,14 @@ export function recordTwist(gameState, plan, twisted) {
 // it. Before floors existed the list was rolled once per run against a made-up ten-door
 // floor, which is why a run stopped meeting corridors after its tenth door.
 //
-// Roll order is the contract a test queues against: the floor's length, then its shop
-// trap, then its puzzle trap, then its corridors.
+// Roll order is the contract a test queues against: the floor's length, then its trap,
+// then its corridors.
 export function advanceFloor(gameState, randomFn = Math.random) {
   gameState.floorNumber += 1
   gameState.floorRooms = floorSize(gameState.floorNumber, randomFn)
   gameState.roomOnFloor = 1
-  gameState.shopTrapOrdinal = rollTrapOrdinal(gameState.floorRooms, randomFn)
-  gameState.puzzleTrapOrdinal = rollTrapOrdinal(gameState.floorRooms, randomFn)
-  gameState.shopsSeen = 0
-  gameState.puzzlesSeen = 0
+  gameState.trapOrdinal = rollTrapOrdinal(gameState.floorRooms, randomFn)
+  gameState.twistablesSeen = 0
   gameState.corridorDoors = rollCorridorDoors(gameState.floorRooms, randomFn)
   gameState.doorsTaken = 0
 

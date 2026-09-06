@@ -179,3 +179,25 @@ export function purchaseBlockedReason(entry, { gameState, health, maxHp }) {
 
   return gameState.inventory.actives.includes(null) ? null : 'no room - free a slot first'
 }
+
+// ---- the shop's guardians ---------------------------------------------------------------
+//
+// A shop is watched. **Four statues stand in it, always** - the same four in every shop, so
+// what the room threatens is a constant rather than something to be read off the door - and
+// buying something wakes some of them.
+//
+// **How many is rolled per purchase, and the roll includes zero.** Sometimes you take the
+// thing and nothing stirs, which is the point: the four statues are a standing threat the
+// player can see and weigh, and paying is a gamble against them rather than a fixed toll.
+// A fixed count would make the arithmetic obvious after two shops.
+//
+// This replaces the tier as the guard count. ROOM_PLANS still says a shop holds 0, 2 or 3
+// enemies by its door's glow, and that is no longer what a shop does - so a shop door's
+// glow now tells the player nothing. See the note in zz_status.md.
+export const STATUE_COUNT = 4
+export const WAKE_MIN = 0
+export const WAKE_MAX = STATUE_COUNT
+
+export function rollWakeCount(randomFn) {
+  return WAKE_MIN + Math.floor(randomFn() * (WAKE_MAX - WAKE_MIN + 1))
+}

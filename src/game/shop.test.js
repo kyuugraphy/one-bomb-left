@@ -5,12 +5,16 @@ import { ITEMS, getItem, itemsFrom } from './items.js'
 import {
   BOMB_REFILL,
   HP_REFILL,
+  STATUE_COUNT,
+  WAKE_MAX,
+  WAKE_MIN,
   REFILL_WEIGHT,
   SHELF_SIZE,
   SHOP_PRICES,
   canAfford,
   priceOf,
   purchaseBlockedReason,
+  rollWakeCount,
   rollShopStock,
   sellableItems,
   shelfLabelFor
@@ -442,5 +446,55 @@ describe('how often a shelf carries the HP Refill', () => {
   it('draws a refill slightly under a never-held catalogue item', () => {
     expect(REFILL_WEIGHT).toBe(0.9)
     expect(REFILL_WEIGHT).toBeLessThan(1)
+  })
+})
+
+// A shop is watched. **Four statues stand in it, always** - the same four however deep the
+// run is - and buying something wakes some of them. How many is rolled per purchase, and
+// the roll includes zero: sometimes you take the thing and nothing stirs.
+describe('the shop guard', () => {
+  it('always raises four statues, whatever else varies', () => {
+    expect(STATUE_COUNT).toBe(4)
+  })
+
+  it('can wake none of them at all', () => {
+    expect(WAKE_MIN).toBe(0)
+    expect(rollWakeCount(() => 0)).toBe(0)
+  })
+
+  it('never wakes more statues than there are', () => {
+    expect(WAKE_MAX).toBe(STATUE_COUNT)
+
+    for (let i = 0; i < 5000; i++) {
+      const woken = rollWakeCount(Math.random)
+
+      expect(woken).toBeGreaterThanOrEqual(0)
+      expect(woken).toBeLessThanOrEqual(STATUE_COUNT)
+    }
+  })
+
+  it('reaches every count from none to all four', () => {
+    const seen = new Set()
+
+    for (let i = 0; i < 5000; i++) {
+      seen.add(rollWakeCount(Math.random))
+    }
+
+    expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('wakes all four on the highest roll', () => {
+    expect(rollWakeCount(() => 0.999)).toBe(WAKE_MAX)
+  })
+
+  it('spends exactly one roll', () => {
+    let calls = 0
+
+    rollWakeCount(() => {
+      calls += 1
+      return 0.5
+    })
+
+    expect(calls).toBe(1)
   })
 })

@@ -95,13 +95,19 @@ export function doorPolicyFor(roomOnFloor, rooms) {
 // when doors are decided at all - a much larger change than the mechanic is worth. A
 // 7-room floor offers no ordinary shop door 4.5% of the time; those floors get no trap.
 //
-// The range scales with the floor rather than being fixed, and is deliberately kept under
-// the number of ordinary shop doors a floor of that length tends to offer (2.15 at 7
-// rooms, 4.30 at 11, 6.46 at 15). Too wide and the trap mostly misses; fixed at 1 and it
-// is always the first shop you see, which is a tell. Measured fire rates at this range:
-// 84.9% of 7-room floors, 96.0% at 11, 98.7% at 15.
+// **Wide on purpose, because a narrow range front-loads the trap.** This was ceil(rooms/4)
+// - two slots on a 7-room floor - chosen to maximise how often the trap got placed. It did
+// that and produced a bias playtest caught immediately: 54% of traps fired in room 1, and
+// another 32% in room 2, because the first twistable door a floor offers is itself usually
+// in room 1. The player learned to expect the ambush before the floor had really started.
+//
+// Spanning nearly the whole floor flattens it - 24/24/23/8/16% across a 7-room floor,
+// 13/13/13/13/13% across the first five of an 11-room one - at the cost of sometimes naming
+// a slot the floor never reaches, so no trap is placed. Measured 90% placed at 7 rooms and
+// 94% at 11, against 100% before. One floor in ten without a trap is the price of the other
+// nine being unpredictable, and an unpredictable trap is the entire point of one.
 export function TRAP_ORDINAL_MAX(rooms) {
-  return Math.ceil(rooms / 4)
+  return rooms - 2
 }
 
 export function rollTrapOrdinal(rooms, randomFn) {
