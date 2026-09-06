@@ -107,6 +107,34 @@ same register as the puzzle room, with no enemies and nothing to clear.
 
 ---
 
+### Scale the world to the 128 px player
+
+**Now:** the player is drawn at 128 px and everything else is still sized against the 32 px
+block she replaced — `CELL` 56, `ENEMY_SIZE` 36, `PICKUP_SIZE` 24, a 24x15 room. She is
+about twice the height of a wall tile and her hitbox is 22 px, so the art overlaps
+everything it passes.
+
+**Wanted:** pits, rocks, enemies, items and the space to move in, all sized to match her.
+
+**Two ways, and they are not the same decision:**
+
+- **Zoom the camera.** `setZoom()` and put the player's drawn size back to its real one.
+  Everything scales together for free — art, collisions, spacing — and every tuned number
+  in the game survives untouched: the 56 px grid, the 336 px range, the speeds, the spawn
+  distances, the `bullets.js` relationships. The cost is field of view: at the zoom needed
+  to make a 32 px player fill 128 px, a 1344 px room shows about six cells across, and
+  this is a game where seeing what you walked into is most of the information.
+- **Scale the world constants.** Grid, room, enemy, pickup, speeds and ranges all multiply.
+  Keeps the viewport, but every number tuned by playtest has to be re-tuned, and the range
+  cap is already 1.4x off its floor — see the shot-speed note in the status file. This is
+  the expensive option and it should not be taken by halves.
+
+**Decide before building.** The reason to write this down rather than pick is that the
+first is nearly free and the second is a week of re-tuning, and which is right depends on
+whether a tighter view is acceptable — a question only playtest answers.
+
+---
+
 ## Audio
 
 ### Replace the synthesised sting with a real file

@@ -6,7 +6,18 @@ _Last updated: 2026-09-06_
 
 **Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
 
-## Latest session (2026-09-06, second pass) — a run has floors, and each one has a boss
+## Latest session (2026-09-06, third pass) — the player has a face
+The green block is gone. The player is **`av_head.png`**, drawn at **128 px** — four times the 32 px block it replaces, and about twice the height of a 56 px wall tile. Big enough that the portrait reads as a portrait rather than a smudge, which was the whole point of trying it.
+
+**The art ships without an alpha channel.** `av_head.png` is RGB: the head sits on an opaque black field, so drawing it straight gives a black square with a face in it. `keyOutBlack()` makes a keyed copy once at load — anything darker than a threshold of 40 becomes transparent — and hands back the new key. The threshold is a range rather than an exact match on `0x000000` because the art is anti-aliased against the black, and it is low enough that the near-black in the hair survives. Guarded on the texture key, because `create()` runs again on every room.
+
+**The hitbox is untouched at 22 px.** Same divide-back-out-by-the-scale trick the bullet uses, so the drawn size is a tuning knob that cannot change what the player collides with. **This is now a visible mismatch, not a rounding error:** at 128 drawn against a 22 px body the drawing is nearly six times the thing it stands for, and the head visibly overlaps walls the player is not touching. Kept deliberately - the alternative reopens what the `PLAYER_HITBOX` comment warns about, losing half-hearts to shots that visibly missed.
+
+**Wanted next, not built: scale the rest of the world to match.** Pits, rocks, enemies, items and the space to move in are all still sized against the old 32 px player. Two ways to do it and they are different decisions - zoom the camera, which keeps every tuned number and shows less of the room, or scale the world constants, which keeps the viewport and retunes everything. See `zz_todo.md`.
+
+**The dev-server watcher fix from this morning was wrong, and quietly so.** It stopped the EBUSY crash by ignoring `public/sprites/**`, which also meant Vite never learned about sprites added *after* boot. Every PNG added later - the avatar, and the terrain art from the pass before - 404'd into the SPA fallback, and Phaser reported `Failed to process file` for art sitting right there on disk. Replaced with `awaitWriteFinish`, which waits for a file's size to settle before watching it: the targeted fix for a lock, with nothing hidden from the server. **A loud crash was the better failure of the two.**
+
+## Previous session (2026-09-06, second pass) — a run has floors, and each one has a boss
 The biggest structural change so far. A run was an unbroken chain of rooms with no shape and no end; it has a skeleton now.
 
 **Floors.** Floor 1 is a fixed 7 rooms, floor 2 rolls 9-11, everything after 13-15. Floor 7 ends nothing — the rule carries on, so how deep a run gets is a fact about the player rather than a number written down.
