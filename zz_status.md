@@ -6,7 +6,18 @@ _Last updated: 2026-09-06_
 
 **Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
 
-## Latest session (2026-09-06, first pass) — the projectile is art, and it flies slower
+## Latest session (2026-09-06, second pass) — a run has floors, and each one has a boss
+The biggest structural change so far. A run was an unbroken chain of rooms with no shape and no end; it has a skeleton now.
+
+**Floors.** Floor 1 is a fixed 7 rooms, floor 2 rolls 9-11, everything after 13-15. Floor 7 ends nothing — the rule carries on, so how deep a run gets is a fact about the player rather than a number written down.
+
+**A boss at the end of each.** The last regular room's door choice is replaced outright: one red door, nothing beside it. The room behind it is an empty stub in the same register as the puzzle room, because today's job is proving the trigger and the transition rather than the fight. Beating it opens one plain pad that drops the player into room 1 of the next floor.
+
+**Two guaranteed shop checkpoints per floor**, and **two pre-picked ambush traps** — one ordinary shop door, one puzzle door — that are guaranteed to exist and *not* guaranteed to fire.
+
+**Two long-standing gaps closed as a side effect.** Corridors reach every floor instead of stopping after a run's tenth door, and big rooms reach every floor instead of only the first.
+
+## Previous session (2026-09-06, first pass) — the projectile is art, and it flies slower
 The player's shot stops being a drawn circle. It is **a sprite** now — `public/sprites/bullet.png`, the first loaded asset in the project, which is why `PlayScene` has a `preload()` at all. Everything else on screen is still shape primitives.
 
 **Drawn at 75 px, hit at 10.** The sprite is far bigger than the shot it stands for, and the hitbox stays the 10 px box the circle had, so nothing about what a shot connects with changed. That separation takes one deliberate line: Arcade builds a body from the game object's display size, so `fire()` divides back out by the sprite's scale to get its 10 px back. **`BULLET_SPRITE_SIZE` is in pixels, not a multiplier** — it was a scale factor for three rounds of tuning and the arithmetic was done by hand every time.
@@ -175,14 +186,15 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 | `currency.js` | `addExp`, `spendExp` | `exp` |
 | `shop.js` | `SHOP_PRICES`, `HP_REFILL`, `BOMB_REFILL`, `SHELF_SIZE`, `REFILL_WEIGHT`, `priceOf`, `canAfford`, `sellableItems`, `shelfLabelFor`, `rollShopStock`, `purchaseBlockedReason` | none - rolls, prices, what may be sold, what the shelf gives away, and why a purchase cannot land |
 | `drops.js` | `rollEnemyDrop`, `DROP_CHANCE`, `HEAL_DROP`, `rollRoomDrop`, `DEBUFF_DROP_SHARE`, `DEBUFF_DROP`, `CLEAN_DROP` | none - rolls whether a kill leaves half a heart, and what clearing a room pays |
-| `doors.js` | `rollDoorCount`, `rollDoors`, `roomPlanFor`, `REWARD_TYPES`, `TYPE_WEIGHTS`, `TIERS`, `ENTRANCE_DOOR`, `ENTRANCE_ENEMIES`, `ENTRANCE_PLAN`, `DOOR_STYLE`, `TIER_GLOW`, `rollTwist`, `rollTwistCap`, `mustStaySafe`, `canTwist`, `TWISTABLE_TYPES`, `TWIST_CHANCE`, `MAX_TWIST_CAP`, `TWISTED_PLAN`, `TWIST_LINES`, `pickTwistLine` | none - rolls the telegraph, the room plan behind it, whether that room twists, and what the ambush says |
+| `doors.js` | `rollDoorCount`, `rollDoors`, `roomPlanFor`, `REWARD_TYPES`, `TYPE_WEIGHTS`, `TIERS`, `ENTRANCE_DOOR`, `ENTRANCE_ENEMIES`, `ENTRANCE_PLAN`, `DOOR_STYLE`, `TIER_GLOW`, `rollTwist`, `rollTwistCap`, `mustStaySafe`, `canTwist`, `TWISTABLE_TYPES`, `TWIST_CHANCE`, `MAX_TWIST_CAP`, `TWISTED_PLAN`, `TWIST_LINES`, `pickTwistLine`, `BOSS_PLAN`, `assignTwistDispositions`, `TWIST_NEVER`, `TWIST_TRAP`, `TWIST_ROLLS` | none - rolls the telegraph, the room plan behind it, whether that room twists, and what the ambush says |
 | `obstacles.js` | `rollCoverage`, `generateObstacles`, `reachesEveryOpenCell`, `COVERAGE_MAX`, `NEIGHBOURS` | none - takes the grid dimensions and reserved cells, returns the blocked grid and the shapes to paint |
 | `bullets.js` | `BULLET_SPEED`, `BULLET_RANGE`, `BULLET_LIFETIME`, `ENEMY_SHOT_RANGE`, `ENEMY_SHOT_LIFETIME`, `rangeReachedAt`, `travelIn`, `limitThatBinds`, `slowestSpeedRangeStillBinds` | none - the numbers behind a shot and which limit ends it |
-| `run.js` | `freshGameState`, `roomFor`, `recordTwist` | owns `gameState`'s shape; turns a restart payload into the room to build; books whether the room a taken door led to turned hostile |
+| `run.js` | `freshGameState`, `roomFor`, `recordTwist`, `advanceFloor` | owns `gameState`'s shape; turns a restart payload into the room to build; books whether a room turned hostile; re-deals the floor at a boundary |
+| `floors.js` | `floorSize`, `FLOOR_BANDS`, `FLOOR_ONE_ROOMS`, `midFloorRoom`, `preBossRoom`, `shopCheckpoints`, `doorPolicyFor`, `BOSS_DOOR`, `SHOP_GUARANTEED`, `NORMAL_DOORS`, `TRAP_ORDINAL_MAX`, `rollTrapOrdinal` | none - how long a floor is, which of its rooms are special, and where its traps go |
 | `pings.js` | `edgePoint` | none - pure geometry; where a ray out of the middle of the screen crosses the arrow ring |
 | `weights.js` | `weightFor`, `weightedPassivePool`, `pickWeighted` | none - reads `inventory` via `countOwned`, returns weights |
 | `inventory.js` | `createInventory`, `setTrinket`, `addPassive`, `addActive`, `swapActive`, `countOwned`, `passiveCounts`, `hasSetBonus` | its own `{ trinket, passives[], actives[3] }` object |
-| `shapes.js` | `ROOM_SHAPES`, `rollRoomShape`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS`, `SHAPE_ROOM_*` | none - data plus the depth-band roll, RNG injected |
+| `shapes.js` | `ROOM_SHAPES`, `rollRoomShape`, `doorCapacity`, `isFloor`, `floorCells`, `shapeSize`, `BASE_ROOM_CELLS`, `MAX_DOORS`, `SHAPE_EDGE_ROOMS`, `SHAPE_ROOM_CHANCE` | none - data plus the floor-band roll, RNG injected |
 | `corridor.js` | `generateCorridorRoom`, `generateCorridorObstacles`, `corridorReservedCells`, `CORRIDOR_WALKABLE_WIDTH`, `CORRIDOR_MIN_LENGTH`, `CORRIDOR_MAX_LENGTH`, `CORRIDOR_WALL_RING`, `CORRIDOR_COVERAGE_MIN`, `CORRIDOR_COVERAGE_MAX` | none - rolls a whole corridor, RNG injected |
 | `shapeRoom.js` | `roomSize`, `cellCentre`, `innerCell`, `solidGrid`, `wallCells`, `wallRun`, `splitDoors`, `doorCells`, `DOOR_INSET` | none - reads a mask, returns grids, cells and world points; `splitDoors` takes an injected RNG |
 | `items.js` | `TRINKET_ITEMS`, `PASSIVE_ITEMS`, `ACTIVE_ITEMS`, `DEBUFF_ITEMS`, `ITEMS`, `SET_BONUS`, `getItem`, `itemsFrom` | none - pure data |
@@ -439,13 +451,19 @@ In every room the player landed exactly on the entry cell, and **no enemy, rock 
 Headless as well, 200 generations per shape: every open cell reachable from the entry every time, **no obstacle ever placed on void or wall**, coverage still topping out at the rolled 33%, and the wall ring sealed on all four (no open cell touching a non-floor cell).
 
 ### Which rooms are big (`rollRoomShape` in `shapes.js`)
-A run is now `rectangle, rectangle, [coin flip x5], rectangle...`. Rooms **3 to 7** each roll a 50/50 between an ordinary 24x15 room and one of the four shapes, drawn evenly; everything outside that band is a rectangle. The band is deliberate rather than a placeholder for "everywhere": the first two rooms are where the game is learned and a space you can see all at once is the right place to learn it, and by the eighth room a run is long enough that a two-minute room every time would drag.
+**A share of the floor, not a slice of the run.** A room is eligible for a big shape when it is neither of the first two rooms of its floor nor either of the last two; in between it is a coin flip, and when it comes up big the four shapes draw evenly.
 
-- **The roll lives with the depth, not with the door.** `takeDoor` bumps `gameState.roomNumber` and rolls against the new number, so the band is a property of how deep the run is and survives whatever the door telegraph said.
-- **A shop is never a big room.** `shelfSpots` lays stock along one line measured in *screen* widths at a fixed fraction of the screen height - in a 2240 px room that line lands in the top-left corner, which for Z and T is void. Rather than teach the shelf about masks for a room type that wants bare floor anyway, a shop plan skips the roll.
-- **The HUD carries `ROOM n`** beside EXP and BOMBS. Without it the band is invisible: there was no way, in play, to know which room you were on.
+| floor | eligible rooms |
+|---|---|
+| 7 | 3, 4, 5 |
+| 9 | 3-7 |
+| 15 | 3-13 |
 
-Verified in the browser over 8 full runs of 10 rooms: shapes appeared **only at rooms 3, 4, 6 and 7** - never at 1, 2, or 8 through 10 - all four shapes turned up, and **none of the 13 shops encountered was ever a big room**. (Room 5 happened not to roll one in this sample; it was a shop in half of those runs.) The distribution itself is pinned by unit tests rather than by the sample: both ends of the band included, both ends excluded by one, ~50% over 4,000 rolls, and all four ids reachable.
+The first rooms are where a floor is settled into, and a space you can see all of at once is the right place to do that. The last two are the pre-boss shop checkpoint and the room whose doors the boss takes over — neither is a place for a two-minute room.
+
+**It used to be rooms 3-7 of the *run*, and that was quietly broken by floors.** The run counter is past 7 before floor 2 begins, so floor 1 got big rooms and **every floor after it was rectangles all the way down**. Measured against the floor instead, every floor gets the same shape of experience regardless of length. `SHAPE_EDGE_ROOMS = 2` is the whole knob, and it is the same safe-middle band the corridors and the shop checkpoints already use rather than a third convention.
+
+Shops stay rectangular — a shelf needs bare floor along one line — and so does the boss room while it is a stub.
 
 ### Fresh run vs. next room (`run.js`)
 `scene.restart()` with **no argument at all** does not clear a scene's stored data - Phaser only replaces `settings.data` when you pass something - so `init()` received the previous room's `{ shape, plan, carried }` straight back. Everything that was supposed to be thrown away came with it. Measured before the fix, in a G big room with EXP set to 4242: the "new" run came up **still G, still `combat_heavy`/`medium`, still holding 4242 EXP**, and since `carried.gameState` is the same object, the inventory, the curses (`riskLevel`, `enemyStrength`), the bomb count and `rewardsCollected` all came back with it. Both `endGame()`'s "press R to try again" and the pause menu's **Exit** were affected; the Exit path even carried a comment saying it started a fresh run. Doors were never affected - `takeDoor` passes a payload, which replaces the stored one.
@@ -557,7 +575,7 @@ The test's end-to-end flood fill moved with it: **"end to end" means door pad to
 
 **Walked in the browser.** A 40x5 vertical corridor, 280x2240 px: spawn at one end, door at the other, 12 obstacles at 10.5% coverage, both enemies pathing the full 39 cells down it. Steered end to end through the real movement keys in 389 frames (6.5 s), dodging rocks, and took the door into room 2. A horizontal one comes out 5x54, 3024x280 px. Note holding a single direction is not enough to cross one — a rock in the middle lane stops you until you sidestep, which is the corridor doing its job.
 
-**Wired into the run** — see the section below. `rollRoomShape` still deals only L/Z/T/G in the 3-7 band; a corridor does not come from there, because it is not one of a room's shapes but a thing that happens *between* rooms.
+**Wired into the run** — see the section below. `rollRoomShape` deals only L/Z/T/G; a corridor does not come from there, because it is not one of a room's shapes but a thing that happens *between* rooms.
 
 ### Corridors in a run (`rollCorridorDoors` in `corridor.js`, the splice in `PlayScene`)
 **Which door-takings have a corridor behind them is rolled once, for the whole floor, up front.** That is sound rather than merely convenient: the number of doors taken on a floor does not depend on *which* doors are taken — one per room, always — so there is nothing to learn by waiting. Two things follow that a per-door probability could not give. The count is exactly the band, where a coin flip aimed at it would sometimes deal none and sometimes twice too many. And **no two corridors can land back to back** as a property of the construction rather than as a retry: pick `count` values out of `doorCount - count + 1`, sort, and add each one's position to it, which maps every plain combination onto exactly one gap-of-two selection and back. The draw stays uniform over the spread-out selections rather than favouring whichever ones a rejection loop finds first.
@@ -570,7 +588,9 @@ The test's end-to-end flood fill moved with it: **"end to end" means door pad to
 | 8-11 rooms | 1-4 | 3.6 |
 | 12+ rooms | 2-5 | 3.8 |
 
-`CORRIDOR_FLOOR_DOORS = 10` is a stand-in for the floor's own room count until floor logic exists — `rollCorridorDoors` takes the count as an argument, so a real floor will pass its own. It is **even on purpose**: reversing a valid selection gives another valid one, so on an odd floor the middle door falls on one side of a halfway split and skews the even-spread test by itself.
+**The stand-in is retired.** `CORRIDOR_FLOOR_DOORS = 10` was a made-up floor length used because no real one existed; `rollCorridorDoors` always took the count as an argument, and a real floor passes its own now. The constant moved into `corridor.test.js`, where it was the only thing still using it, keeping its "even on purpose" reasoning: reversing a valid selection gives another valid one, so on an odd floor the middle door falls on one side of a halfway split and skews the even-spread test by itself.
+
+**The list is re-rolled at every floor boundary, with `doorsTaken` reset beside it** — the two are one thing, since the list is a set of indices into *this* floor's door-takings. Before floors, it was rolled once per run, which is why a run stopped meeting corridors after its tenth door. **No corridor is ever spliced behind a boss door**: a hallway between the last room and the boss puts a pause exactly where the run should tighten.
 
 **`doorsTaken` is a second counter beside `roomNumber`**, and the two drift apart by exactly the number of corridors walked. That is the whole of "a corridor does not count as a room": `roomNumber` drives the big-room band and the depth display and is not touched, while `doorsTaken` indexes the pre-rolled list.
 
@@ -812,6 +832,10 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **Playwright is wired up now** as a scripted-run harness, not as a test suite: `npx playwright install chromium` once, then a throwaway script against the dev server. It needs `window.__game = new Phaser.Game(...)` in `src/main.js`, added for the run and removed after. Two gotchas found: `keyboard.press(k)` is too fast for Phaser's per-frame `JustDown` (hold with `down`/`waitForTimeout`/`up` instead), and the headless browser needs the download above or `launch()` throws.
 
 ## Not done / known gaps
+- **The boss room is an empty stub.** It has no enemies and clears on the frame it opens; beating it means walking into it. It exists to prove the trigger and the floor transition, and it should eventually open a **cutscene and a memory unlock** — deliberately not stubbed, because a half-built cutscene hook is harder to replace than a plain door. See `zz_todo.md`.
+- **A run still has no end.** Floors keep dealing past floor 7 on the floors-3+ rule, so a run chains for as long as the player survives. A victory condition is its own piece of work.
+- **The trap mechanic is bounded by the twist cap, not by itself.** A run gets roughly its `twistCap` in ambushes however many traps are placed, so the two trap systems decide *where* an ambush can happen rather than *how many* there are. Measured: traps placed on 94.6% / 97.7% of floors, entered ~40% of the time, and **about three fifths of entered traps fizzle**. Front-loading is severe — the first trap a run meets fires 79.6% of the time, the sixth 1.2%. 20.3% of runs see no ambush at all, almost exactly the runs dealt `twistCap: 0`.
+- **`roomOnFloor` passes the floor's length in the boss room.** The boss sits past the last numbered room, so the counter reads 8 on a 7-room floor. The HUD prints the word BOSS instead of the number, but anything else reading `roomOnFloor` should expect it to exceed `floorRooms` by one there.
 - **`bombs.js` is unwired, and now visibly so.** `useBomb` and `refillBomb` have no caller, `bombCount` only increments, and the HUD prints a number that nothing can spend. The shop no longer sells bombs because of it. This is the project's name and it is still not in the game.
 - **A 3.5 s freeze every ambush has no skip.** Rare enough not to matter at `TWIST_CHANCE = 0.01`, but on a second or third encounter the player has already read the line and is waiting out an animation. Dismiss-on-keypress is the fix if it starts to grate; deliberately not built, because a skippable freeze needs input handling inside a state whose whole point is that input is dead.
 - **The ambush panel is a flat rectangle at 0.3 alpha.** It dims what is behind it by 30%, which is enough to read over but not enough to hide a red enemy sitting directly behind a red letter. Raising `AMBUSH_PANEL_ALPHA` trades readability against seeing the room you have been dropped into. See `zz_todo.md` for the PNG window meant to replace it.
@@ -819,7 +843,6 @@ A big room is 40x40 cells against a 24x15 viewport, so on entry four or five of 
 - **The twist's fairness rules barely fire at 1%.** The no-consecutive rule blocked 118 twists in 5,000,000 rooms and the cap 4,411, nearly all of the latter from `twistCap: 0` runs. They are insurance against the rate going up rather than something the game currently does. Nothing is wrong with them — but do not read a green test as evidence the rules matter in play yet.
 - **The ambush sting is the only sound in the game, and it is synthesised.** No asset, no loader, no Phaser sound manager. It is a placeholder in the same register as the coloured rectangles, and the whole of `playAmbushSting` is replaceable by one `this.sound.play()` once the project takes on real audio. Until then a browser that blocks audio silently drops it — the try/catch is deliberate, and the message carries the moment on its own.
 - **The shop got more common and perfectly honest at once.** Shop doors are 21.5% of doors, and since the type is never lied about an amber door is now reliably a shop. Both are straight buffs to the item economy that fell out of the merge rather than being chosen; the shop is already the main item source, and nothing has measured what this does over a long run.
-- **There is no floor.** `CORRIDOR_FLOOR_DOORS = 10` stands in for a room count nothing computes, and the corridor list is rolled once by `freshGameState` and never rolled again — so a run past its tenth door simply stops meeting corridors. It is right for as long as a run is one floor, which is exactly as long as there is no floor boundary. Whatever introduces floors has to re-roll the list and reset `doorsTaken` with it.
 - **The corridor exit's plain slate is a placeholder, not final art.** It is a coloured rectangle like everything else on screen and is to be replaced with a PNG. What has to survive that swap is what the colour is carefully *not* saying: no reward type, no difficulty tier, nothing that reads as a second choice.
 - **A risky room's payout is still refusable, though it is now worth taking.** Each debuff carries a real bonus, so walking around one costs the player something - which is the fix for "why would anyone touch this". But with no take/skip UI, refusing is still just a matter of not walking into it, so a player who does not want *that particular* trade pays nothing to skip it. Live with it, or make the payout land on the player rather than on the floor.
 - **Healing is now a coin flip you do not control.** The HP Refill turns up on 25% of shelves since all three slots became rolled, and it is the only full heal in the game. A run that draws three item-only shops in a row has no way to top up beyond half-heart floor drops. `REFILL_WEIGHT` in `shop.js` is the knob if that plays too thin; a floor rule ("at least one refill per shelf") would be the other answer, at the cost of the varying shelf this change was for.
@@ -916,6 +939,6 @@ Verified after the cleanup: `npx vitest run` 66/66, `npm run build` clean, and a
 - [x] ~~Make drops rare~~ — `drops.js`; one kill in ten leaves half a heart, and nothing else. Rooms no longer start with treasure on the floor either.
 - [ ] **Room-clear payout**: give a cleared room the treasure/reward drop that kills no longer make. `spawnTreasurePickup` and `spawnRewardPickup` are waiting, unreferenced, for exactly this.
 - [x] ~~**Wire the big rooms into the scene**~~ — done for L: walls built from the mask, the mask fed to `generateObstacles` as the solid grid, the wall joined to the walk-line test so BFS routes round the concave corner, entry and exit doorways placed off the mask's own data, and the camera following the player. Z, T and G are still unreached.
-- [x] ~~**Reach the big rooms in play**~~ - `rollRoomShape()`; rooms 3-7 are a coin flip, the four shapes draw evenly, shops stay rectangular.
+- [x] ~~**Reach the big rooms in play**~~ - `rollRoomShape()`; a coin flip in the middle band of each floor, the four shapes draw evenly, shops and the boss room stay rectangular.
 - [ ] **Tune the big-room band.** 3-7 at 50/50 is a first guess made without a long run behind it: it can deal five big rooms in a row, or none at all, and nothing scales the band with how a run is going.
 - [ ] Rebalance the item economy around the 10% drop rate — four different actives is a long way off at 3.3% each.
