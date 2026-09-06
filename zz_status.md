@@ -13,11 +13,22 @@ The player's shot stops being a drawn circle. It is **a sprite** now — `public
 
 **The art points right at rest**, so the travel angle is the rotation outright: `setRotation(Math.atan2(aim.y, aim.x))`. Firing up is aim `(0, -1)`, a quarter turn anticlockwise. Diagonals follow, not just the four axes. Alpha is 0.9.
 
-**Speed is 490 px/s, down from 700, and the fire cooldown is 360 ms, up from 180.** Both are base numbers — `computeStats()` still layers items on the cooldown, so the shop's rolls scale from here. One consequence worth knowing: `fireCooldownBonus` is a flat -20/-35 ms, so against a 360 ms base those items are half the improvement they were against 180.
+**Speed is 392 px/s, down from 700 in two steps (0.7x then 0.8x), and the fire cooldown is 360 ms, up from 180.** Both are base numbers — `computeStats()` still layers items on the cooldown, so the shop's rolls scale from here. One consequence worth knowing: `fireCooldownBonus` is a flat -20/-35 ms, so against a 360 ms base those items are half the improvement they were against 180.
 
-**The slower bullet cost five tests in `bullets.test.js`, which is the point of that module.** The range cap still binds — a shot still dies at 336 px and the 1200 ms timeout is still a backstop — but every margin narrowed, and the assertions were updated to the true figures rather than loosened quietly. The cap is now reached in **686 ms, 1.75x inside the timeout** (was 480 ms and 2.5x). A bullet used to clear its range in under half its lifetime and now needs ~57%, so that test asserts two thirds *and* pins that it no longer makes it in half. The player-vs-enemy dodge asymmetry is **2.36x**, down from over 3x. **The floor is 280 px/s**: below that the timeout starts cutting shots short of their range, which leaves about one more 0.7x step of room.
+**Each speed cut costs the same five tests in `bullets.test.js`, which is the point of that module.** The range cap still binds — a shot still dies at 336 px and the 1200 ms timeout is still a backstop — but every margin narrowed at each step, and the assertions were moved to the true figures rather than loosened quietly.
+
+| | 700 px/s | 490 | **392 (shipped)** |
+|---|---|---|---|
+| cap reached in | 480 ms | 686 ms | **857 ms** |
+| timeout headroom | 2.5x | 1.75x | **1.4x** |
+| range cleared within | half its lifetime | two thirds | **~71%** |
+| dodge asymmetry vs enemy shot | 3x+ | 2.36x | **1.88x** |
+
+**The floor is 280 px/s** — `slowestSpeedRangeStillBinds()` — and at 392 the gap to it is 1.4x. **There is no longer room for another cut of this size:** one more 0.8x lands at 314 and one more 0.7x at 274, which is under the floor and hands the room-ending decision back to the timeout. Slowing the shot further means raising `BULLET_LIFETIME` or shortening `BULLET_RANGE` in the same change. Worth watching too: the dodge asymmetry is the reason a duel feels survivable, and at 1.88x it is half what it was at 700 px/s.
 
 **A colour-flicker effect was built and rejected.** A tween oscillated the projectile between pale blue-white and violet over its lifetime to read as pact instability; it did not survive first sight and is gone, along with its five constants. Worth recording so it is not proposed twice. Note for anything similar later: a `this.add.circle` is an Arc, not a Sprite, so `setTint()` does not exist on it — the fill is `setFillStyle()`. Now that the bullet is a real sprite, `setTint()` is available.
+
+**A sparkle trail was built, seen and reverted the same day.** Small circles shed behind the projectile, fading over 1-3 s. It is wanted, but as part of a future **projectile upgrade** rather than as the base shot - the plain sprite is what an un-upgraded bullet should look like. The trial and its tuning are written up in `zz_todo.md`, including the one number the trial settled: **1.5 s, flat**, because 1-3 s outlived the ~860 ms bullet several times over and left the room glittering. None of it is in git history, so that entry is the only record.
 
 **`vite.config.js` is new**, and exists for one reason: re-exporting the sprite while the dev server runs took the server down twice. Windows holds a lock on the file during the export, Vite's watcher throws `EBUSY`, and the process dies. The config ignores `public/sprites/**` — nothing there needs watching, since `public/` is served from disk and a refresh already picks up a new export.
 
@@ -135,7 +146,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ### Game loop (`src/game/PlayScene.js`, 3127 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
-- Shooting: arrow keys aim + auto-fire, **360 ms cooldown**, a **75 px sprite at 490 px/s** rotated to its travel angle (alpha 0.9, 10 px hitbox), **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
+- Shooting: arrow keys aim + auto-fire, **360 ms cooldown**, a **75 px sprite at 392 px/s** rotated to its travel angle (alpha 0.9, 10 px hitbox), **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
 - Room walls: 5 static rectangles (**56 px = one full grid cell**, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`. `WALL_THICKNESS = CELL` is deliberate, not a magic number: the wall bodies fill exactly the border ring the grid marks blocked, so physics and pathing agree on which cells are solid (see the wall-pocket fix below).

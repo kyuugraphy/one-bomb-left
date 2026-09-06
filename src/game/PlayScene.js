@@ -1189,9 +1189,9 @@ export class PlayScene extends Phaser.Scene {
 
   // Range is a baseline rule on both sides of the fight: a shot dies at its range unless a
   // wall, a rock or something it hit takes it first. The timeouts in fire() and
-  // fireEnemyShot() outlive it at the shipped speeds - the player's by 1.75x, the enemy's
-  // by more - and never get to fire. See bullets.js, which holds that arithmetic and the
-  // tests that keep it true.
+  // fireEnemyShot() outlive it at the shipped speeds - the player's by 1.4x, the enemy's
+  // by far more - and never get to fire. See bullets.js, which holds that arithmetic and
+  // the tests that keep it true.
   updateProjectiles() {
     this.trackRange(this.bullets, BULLET_RANGE)
     this.trackRange(this.enemyShots, ENEMY_SHOT_RANGE)
