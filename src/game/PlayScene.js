@@ -51,7 +51,14 @@ import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 const PLAYER_SPEED = 320
 const PLAYER_SIZE = 32
 const BULLET_RADIUS = 5
-const FIRE_COOLDOWN = 180
+const BULLET_TEXTURE = 'bullet'
+// The sprite is drawn far larger than the shot it stands for. Its hitbox stays the 10 px
+// box the old circle had - see fire() - so this size is purely visual.
+const BULLET_SPRITE_SIZE = 75
+const BULLET_ALPHA = 0.9
+// Half the base fire rate, which is double the wait between shots. Items still layer on
+// top of this - see computeStats() - so the shop's cooldown rolls scale from here.
+const FIRE_COOLDOWN = 360
 const MUZZLE_OFFSET = PLAYER_SIZE / 2 + BULLET_RADIUS
 const ENEMY_SIZE = 36
 const ENEMY_SPEED = 120
@@ -335,6 +342,11 @@ function enemyHpFor(strengthBonus) {
 export class PlayScene extends Phaser.Scene {
   constructor() {
     super('play')
+  }
+
+  // The only loaded asset in the game - everything else is drawn with shape primitives.
+  preload() {
+    this.load.image(BULLET_TEXTURE, 'sprites/bullet.png')
   }
 
   // A restart hands the next room the plan the chosen door resolved to, plus the state
@@ -1137,13 +1149,28 @@ export class PlayScene extends Phaser.Scene {
   }
 
   fire(aim) {
-    const bullet = this.add.circle(
+    const bullet = this.add.sprite(
       this.player.x + aim.x * MUZZLE_OFFSET,
       this.player.y + aim.y * MUZZLE_OFFSET,
-      BULLET_RADIUS,
-      0xfacc15
+      BULLET_TEXTURE
     )
+
+    bullet.setDisplaySize(BULLET_SPRITE_SIZE, BULLET_SPRITE_SIZE)
+    bullet.setAlpha(BULLET_ALPHA)
+    // The art points right at rest, so the travel angle is the rotation outright: firing
+    // up is aim (0, -1), which is a quarter turn anticlockwise on screen.
+    bullet.setRotation(Math.atan2(aim.y, aim.x))
+
     this.physics.add.existing(bullet)
+
+    // Arcade sizes a new body from the display size, which would hand a shot this big a
+    // hitbox ten times what it had. setSize works in source pixels and multiplies by the
+    // sprite's scale, so dividing back out by that scale restores the original 10 px box,
+    // centred on the sprite. Bodies do not rotate, which is what we want: a shot's reach
+    // should not depend on whether it was fired along an axis or a diagonal.
+    const hitbox = (BULLET_RADIUS * 2) / bullet.scaleX
+
+    bullet.body.setSize(hitbox, hitbox)
     bullet.body.setVelocity(aim.x * BULLET_SPEED, aim.y * BULLET_SPEED)
     this.bullets.add(bullet)
 
@@ -1154,8 +1181,9 @@ export class PlayScene extends Phaser.Scene {
 
   // Range is a baseline rule on both sides of the fight: a shot dies at its range unless a
   // wall, a rock or something it hit takes it first. The timeouts in fire() and
-  // fireEnemyShot() outlive it by more than double at the shipped speeds and never get to
-  // fire - see bullets.js, which holds that arithmetic and the tests that keep it true.
+  // fireEnemyShot() outlive it at the shipped speeds - the player's by 1.75x, the enemy's
+  // by more - and never get to fire. See bullets.js, which holds that arithmetic and the
+  // tests that keep it true.
   updateProjectiles() {
     this.trackRange(this.bullets, BULLET_RANGE)
     this.trackRange(this.enemyShots, ENEMY_SHOT_RANGE)

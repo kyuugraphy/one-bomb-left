@@ -19,8 +19,8 @@ describe('rangeReachedAt', () => {
     expect(rangeReachedAt(350, 700)).toBe(500)
   })
 
-  it('puts the shipped range at 480 ms', () => {
-    expect(rangeReachedAt()).toBeCloseTo(480)
+  it('puts the shipped range at 686 ms', () => {
+    expect(rangeReachedAt()).toBeCloseTo(685.71, 1)
   })
 })
 
@@ -29,22 +29,25 @@ describe('travelIn', () => {
     expect(travelIn(rangeReachedAt())).toBeCloseTo(BULLET_RANGE)
   })
 
-  it('has a bullet outrun its range less than halfway through its lifetime', () => {
-    expect(travelIn(BULLET_LIFETIME / 2)).toBeGreaterThan(BULLET_RANGE)
+  // At 700 px/s this cleared inside half the lifetime. At 490 it needs nearer two
+  // thirds - still clear of the timeout, but the slack is worth stating honestly.
+  it('has a bullet outrun its range inside two thirds of its lifetime', () => {
+    expect(travelIn(BULLET_LIFETIME * 0.66)).toBeGreaterThan(BULLET_RANGE)
+    expect(travelIn(BULLET_LIFETIME / 2)).toBeLessThan(BULLET_RANGE)
   })
 })
 
-// The question this module exists to answer: with a 336 px cap at 700 px/s, does the old
-// 1200 ms timeout ever end a shot first? It does not - it has two and a half times more
-// room than it needs - so it is a backstop, and the test says so out loud in case someone
-// changes the speed and quietly turns it back into a rule.
+// The question this module exists to answer: with a 336 px cap at 490 px/s, does the old
+// 1200 ms timeout ever end a shot first? It does not - it has one and three quarter times
+// more room than it needs - so it is a backstop, and the test says so out loud in case
+// someone changes the speed and quietly turns it back into a rule.
 describe('limitThatBinds', () => {
   it('is the range cap at the shipped numbers', () => {
     expect(limitThatBinds()).toBe('range')
   })
 
-  it('leaves the lifetime with well over twice the room it needs', () => {
-    expect(BULLET_LIFETIME / rangeReachedAt()).toBeGreaterThan(2)
+  it('leaves the lifetime half again more room than it needs', () => {
+    expect(BULLET_LIFETIME / rangeReachedAt()).toBeGreaterThan(1.5)
   })
 
   it('hands over to the lifetime once a bullet is slow enough', () => {
@@ -66,8 +69,8 @@ describe('slowestSpeedRangeStillBinds', () => {
     expect(slowestSpeedRangeStillBinds()).toBeCloseTo(280)
   })
 
-  it('is a long way below the speed bullets actually travel', () => {
-    expect(slowestSpeedRangeStillBinds()).toBeLessThan(BULLET_SPEED / 2)
+  it('is comfortably below the speed bullets actually travel', () => {
+    expect(slowestSpeedRangeStillBinds()).toBeLessThan(BULLET_SPEED * 0.7)
   })
 })
 
@@ -116,7 +119,7 @@ describe('enemy shots', () => {
   // time to move out of the way - the reach is symmetric, the threat is not.
   it('gives the player longer to dodge than their own shot gives an enemy', () => {
     expect(rangeReachedAt(ENEMY_SHOT_RANGE, ENEMY_SHOT_SPEED)).toBeGreaterThan(
-      rangeReachedAt(BULLET_RANGE, BULLET_SPEED) * 3
+      rangeReachedAt(BULLET_RANGE, BULLET_SPEED) * 2
     )
   })
 })

@@ -4,15 +4,16 @@
 // bullet is going - so the relationship is spelled out here and tested, rather than left
 // as a comment that goes stale the first time someone tunes the speed.
 
-export const BULLET_SPEED = 700
+export const BULLET_SPEED = 490
 
 // Six cells of the 56 px grid. Short enough that a fight is something you walk into
 // rather than something you solve from across the room, which a 1344 px room let you do.
 export const BULLET_RANGE = 336
 
 // The original limit, from before there was a range cap. At the shipped numbers the cap
-// always bites first - see limitThatBinds - so this is a backstop rather than a rule the
-// player ever feels.
+// still bites first - see limitThatBinds - so this is a backstop rather than a rule the
+// player ever feels. The margin is thinner than it was: dropping the speed to 490 left
+// the timeout 1.75x the room it needs, down from 2.5x at 700.
 export const BULLET_LIFETIME = 1200
 
 // Enemy shots carry the same reach, deliberately: a duel is symmetric, and a room where

@@ -1,12 +1,29 @@
 # one-bomb-left — Status
 
-_Last updated: 2026-09-04_
+_Last updated: 2026-09-06_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
 **Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
 
-## Latest session (2026-09-04, fourth pass) — the ambush reads, and the shop stops selling nothing
+## Latest session (2026-09-06, first pass) — the projectile is art, and it flies slower
+The player's shot stops being a drawn circle. It is **a sprite** now — `public/sprites/bullet.png`, the first loaded asset in the project, which is why `PlayScene` has a `preload()` at all. Everything else on screen is still shape primitives.
+
+**Drawn at 75 px, hit at 10.** The sprite is far bigger than the shot it stands for, and the hitbox stays the 10 px box the circle had, so nothing about what a shot connects with changed. That separation takes one deliberate line: Arcade builds a body from the game object's display size, so `fire()` divides back out by the sprite's scale to get its 10 px back. **`BULLET_SPRITE_SIZE` is in pixels, not a multiplier** — it was a scale factor for three rounds of tuning and the arithmetic was done by hand every time.
+
+**The art points right at rest**, so the travel angle is the rotation outright: `setRotation(Math.atan2(aim.y, aim.x))`. Firing up is aim `(0, -1)`, a quarter turn anticlockwise. Diagonals follow, not just the four axes. Alpha is 0.9.
+
+**Speed is 490 px/s, down from 700, and the fire cooldown is 360 ms, up from 180.** Both are base numbers — `computeStats()` still layers items on the cooldown, so the shop's rolls scale from here. One consequence worth knowing: `fireCooldownBonus` is a flat -20/-35 ms, so against a 360 ms base those items are half the improvement they were against 180.
+
+**The slower bullet cost five tests in `bullets.test.js`, which is the point of that module.** The range cap still binds — a shot still dies at 336 px and the 1200 ms timeout is still a backstop — but every margin narrowed, and the assertions were updated to the true figures rather than loosened quietly. The cap is now reached in **686 ms, 1.75x inside the timeout** (was 480 ms and 2.5x). A bullet used to clear its range in under half its lifetime and now needs ~57%, so that test asserts two thirds *and* pins that it no longer makes it in half. The player-vs-enemy dodge asymmetry is **2.36x**, down from over 3x. **The floor is 280 px/s**: below that the timeout starts cutting shots short of their range, which leaves about one more 0.7x step of room.
+
+**A colour-flicker effect was built and rejected.** A tween oscillated the projectile between pale blue-white and violet over its lifetime to read as pact instability; it did not survive first sight and is gone, along with its five constants. Worth recording so it is not proposed twice. Note for anything similar later: a `this.add.circle` is an Arc, not a Sprite, so `setTint()` does not exist on it — the fill is `setFillStyle()`. Now that the bullet is a real sprite, `setTint()` is available.
+
+**`vite.config.js` is new**, and exists for one reason: re-exporting the sprite while the dev server runs took the server down twice. Windows holds a lock on the file during the export, Vite's watcher throws `EBUSY`, and the process dies. The config ignores `public/sprites/**` — nothing there needs watching, since `public/` is served from disk and a refresh already picks up a new export.
+
+**Still oversized on disk.** `bullet.png` is 1254x1254 for something drawn at 75 px. It works, but it is a ~17x downsample and about half a megabyte.
+
+## Previous session (2026-09-04, fourth pass) — the ambush reads, and the shop stops selling nothing
 Playtest feedback, three rounds of it.
 
 **The ambush says one of 28 lines** instead of one fixed sentence, never the same one twice running. It sits on a dark panel now, because red text over red enemies is the same colour twice and an ambush puts nine of them in the room. And it holds for **3.5 seconds** rather than 0.5 — the original half-second was set when the message was one short string, and it survived the arrival of a 94-character pool without anybody re-checking it.
@@ -116,9 +133,9 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 
 ## Done
 
-### Game loop (`src/game/PlayScene.js`, 2666 lines)
+### Game loop (`src/game/PlayScene.js`, 3127 lines)
 - Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
-- Shooting: arrow keys aim + auto-fire, 180 ms cooldown, yellow bullets at 700 px/s, **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
+- Shooting: arrow keys aim + auto-fire, **360 ms cooldown**, a **75 px sprite at 490 px/s** rotated to its travel angle (alpha 0.9, 10 px hitbox), **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
 - Room walls: 5 static rectangles (**56 px = one full grid cell**, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`. `WALL_THICKNESS = CELL` is deliberate, not a magic number: the wall bodies fill exactly the border ring the grid marks blocked, so physics and pathing agree on which cells are solid (see the wall-pocket fix below).
@@ -140,7 +157,7 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 - Combat: bullet→enemy overlap deals 1 dmg, flash tween on hit, destroy at 0 HP. Enemy HP = `ENEMY_BASE_HP` (10) + `enemyStrength` (the run's accumulated 'enemy' curses) + the room's `enemyStrengthBonus` (0/1/2 by door tier).
 - Player damage: enemy touch or shot → 1 HP, 600 ms i-frames and a 60 ms alpha flash. (The old `Hits taken` counter is long gone; the health bar is the only readout.) **A hit never moves the player.** It used to shove them 420 px/s away from whatever hit them and lock the controls out for 180 ms, which meant a hit taken mid-corridor decided where they ended up; `KNOCKBACK_SPEED`, `KNOCKBACK_DURATION` and `knockbackUntil` are gone and `takeHit()` no longer needs to know where the damage came from. The flash is the only thing standing in for the shove — the same one an enemy gives when it is shot.
 
-### Pure logic modules (tested, 214/214 passing)
+### Pure logic modules (tested, 500/500 passing across 20 files)
 | Module | Exports | State touched |
 |---|---|---|
 | `bombs.js` | `useBomb`, `refillBomb` (30% chance, injected RNG) | `bombCount` |
