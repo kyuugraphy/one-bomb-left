@@ -183,16 +183,6 @@ export function corridorsForFloor(doorCount) {
   return CORRIDOR_FLOOR_BANDS.find((band) => doorCount <= band.upTo)
 }
 
-// A stand-in for the floor's own room count until floor logic exists. Floor 1 is 7 rooms,
-// Floor 2 is 9-11 and the rest run to 15 and beyond, so this is mid-range rather than any
-// real floor - rollCorridorDoors takes the count, and a real floor will pass its own.
-//
-// Even on purpose. Reversing a valid selection gives another valid one, so corridors are
-// distributed symmetrically about the middle of a floor; on an odd floor the middle door
-// falls on one side of a halfway split and skews it by itself, which would make the
-// even-spread test measure that artefact rather than the property.
-export const CORRIDOR_FLOOR_DOORS = 10
-
 // Which door-takings of a floor have a corridor spliced in behind them.
 //
 // Rolled for the whole floor up front rather than per door, and that is sound because the

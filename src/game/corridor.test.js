@@ -4,7 +4,6 @@ import { doorCapacity } from './shapes.js'
 import {
   CORRIDOR_COVERAGE_MAX,
   CORRIDOR_COVERAGE_MIN,
-  CORRIDOR_FLOOR_DOORS,
   CORRIDOR_MAX_LENGTH,
   CORRIDOR_MIN_LENGTH,
   CORRIDOR_WALKABLE_WIDTH,
@@ -14,6 +13,16 @@ import {
   corridorsForFloor,
   rollCorridorDoors
 } from './corridor.js'
+
+// A mid-range floor to measure against. It was a production constant while floors did not
+// exist and rollCorridorDoors had to be given some door count; real floors supply their own
+// now, so it lives here, where it was always really being used.
+//
+// **Even on purpose.** Reversing a valid selection gives another valid one, so corridors
+// are distributed symmetrically about the middle of a floor - and on an odd floor the
+// middle door falls on one side of a halfway split and skews the even-spread test by
+// itself, which would have it measuring that artefact rather than the property.
+const CORRIDOR_FLOOR_DOORS = 10
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
 function rng(...values) {

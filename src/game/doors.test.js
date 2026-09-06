@@ -6,7 +6,12 @@ import {
   ENTRANCE_PLAN,
   MAX_TWIST_CAP,
   TWISTED_PLAN,
+  TWIST_TRAP,
+  BOSS_PLAN,
+  assignTwistDispositions,
   TWIST_CHANCE,
+  TWIST_NEVER,
+  TWIST_ROLLS,
   TWIST_LINES,
   pickTwistLine,
   mustStaySafe,
@@ -20,7 +25,8 @@ import {
   rollDoorCount,
   rollDoors
 } from './doors.js'
-import { recordTwist } from './run.js'
+import { BOSS_DOOR, NORMAL_DOORS, SHOP_GUARANTEED } from './floors.js'
+import { freshGameState, recordTwist } from './run.js'
 
 // A queued RNG: each call returns the next value, so every roll in a test is chosen.
 function rng(...values) {
@@ -570,5 +576,270 @@ describe('pickTwistLine', () => {
     })
 
     expect(calls).toBe(1)
+  })
+})
+
+// Not every shop door is equally dangerous, and none of them look different.
+//
+// The plan cannot carry this: a checkpoint shop and an ordinary shop have **identical**
+// plans - same type, same tier - so canTwist(plan) cannot tell them apart. The disposition
+// rides on the door instead, decided when the doors are built.
+describe('rollTwist dispositions', () => {
+  const OPEN = { twistCap: 4, twistsSoFar: 0, lastRoomWasTwist: false }
+  const SPENT = { twistCap: 0, twistsSoFar: 0, lastRoomWasTwist: false }
+  const JUST_TWISTED = { twistCap: 4, twistsSoFar: 1, lastRoomWasTwist: true }
+  const shop = roomPlanFor({ type: 'shop', tier: 'easy' })
+  const combat = roomPlanFor({ type: 'combat', tier: 'easy' })
+
+  it('defaults to the ordinary roll when no disposition is given', () => {
+    expect(rollTwist(shop, OPEN, () => 0)).toBe(true)
+    expect(rollTwist(shop, OPEN, () => 0.5)).toBe(false)
+  })
+
+  // The two guaranteed checkpoints. A resupply you cannot rely on is not a checkpoint.
+  it('never twists a door marked never, whatever the roll or the budget', () => {
+    ;[0, 0.001, 0.5, 0.99].forEach((roll) => {
+      expect(rollTwist(shop, OPEN, () => roll, TWIST_NEVER)).toBe(false)
+    })
+  })
+
+  it('spends no roll on a door that can never twist', () => {
+    let calls = 0
+
+    rollTwist(shop, OPEN, () => {
+      calls += 1
+      return 0
+    }, TWIST_NEVER)
+
+    expect(calls).toBe(0)
+  })
+
+  // The floor's trap. It skips the 1% roll - that is the whole of what makes it a trap -
+  // but it is not exempt from anything else.
+  it('twists a trap door whatever the roll says, when the budget allows', () => {
+    ;[0, 0.5, 0.99].forEach((roll) => {
+      expect(rollTwist(shop, OPEN, () => roll, TWIST_TRAP)).toBe(true)
+    })
+  })
+
+  // **A trap is guaranteed to exist, not guaranteed to fire.** It obeys the cap and the
+  // no-consecutive rule exactly as a 1% twist does, so walking into one on a spent budget
+  // gives an ordinary, safe room and no sign that anything was ever meant to happen.
+  //
+  // Measured consequence: about three fifths of the traps a player walks into fizzle, and
+  // a run dealt twistCap 0 - one in five - never sees one fire at all.
+  it('fizzles into a safe room when the budget is spent', () => {
+    expect(rollTwist(shop, SPENT, () => 0, TWIST_TRAP)).toBe(false)
+  })
+
+  it('fizzles when the last twistable room already twisted', () => {
+    expect(rollTwist(shop, JUST_TWISTED, () => 0, TWIST_TRAP)).toBe(false)
+  })
+
+  it('spends no roll on a trap door, fired or fizzled', () => {
+    const count = (run) => {
+      let calls = 0
+
+      rollTwist(shop, run, () => {
+        calls += 1
+        return 0
+      }, TWIST_TRAP)
+
+      return calls
+    }
+
+    expect(count(OPEN)).toBe(0)
+    expect(count(SPENT)).toBe(0)
+  })
+
+  // The plan is still a hard gate, even for 'always'. A fight that becomes a fight is not
+  // an ambush, so a disposition assigned to the wrong door type fails closed rather than
+  // producing a meaningless twist.
+  it('will not twist a combat room even when marked as a trap', () => {
+    expect(rollTwist(combat, OPEN, () => 0, TWIST_TRAP)).toBe(false)
+  })
+
+  it('leaves an ordinary shop door on the existing rules', () => {
+    expect(rollTwist(shop, OPEN, () => 0, TWIST_ROLLS)).toBe(true)
+    expect(rollTwist(shop, OPEN, () => 0.5, TWIST_ROLLS)).toBe(false)
+    expect(rollTwist(shop, SPENT, () => 0, TWIST_ROLLS)).toBe(false)
+    expect(rollTwist(shop, JUST_TWISTED, () => 0, TWIST_ROLLS)).toBe(false)
+  })
+})
+
+// The room at the end of a floor. A stub for now, exactly as the puzzle room is one: the
+// point of building it is proving the trigger and the transition, not the fight.
+describe('BOSS_PLAN', () => {
+  it('is a room of its own kind, not a dressed-up combat room', () => {
+    expect(BOSS_PLAN.type).toBe('boss')
+    expect(BOSS_PLAN.roomType).toBe('boss')
+  })
+
+  it('is empty while it is a stub', () => {
+    expect(BOSS_PLAN.enemyCount).toBe(0)
+    expect(BOSS_PLAN.enemyStrengthBonus).toBe(0)
+  })
+
+  // Spelled out rather than rolled, like ENTRANCE_PLAN and CORRIDOR_PLAN: no door choice
+  // produced it, so it is not an answer to a roll and does not belong in the table of them.
+  it('never appears in the ordinary door pool', () => {
+    expect(REWARD_TYPES).not.toContain('boss')
+  })
+
+  it('has something to draw, so the pad cannot ship invisible', () => {
+    expect(DOOR_STYLE.boss.color).toBeGreaterThan(0)
+    expect(DOOR_STYLE.boss.label.length).toBeGreaterThan(0)
+  })
+})
+
+describe('rollDoors under a floor policy', () => {
+  it('offers ordinary rooms exactly what it always did', () => {
+    const doors = rollDoors(rng(0, 0, 0, 0, 0), NORMAL_DOORS)
+
+    expect(doors).toHaveLength(2)
+    doors.forEach((door) => expect(REWARD_TYPES).toContain(door.type))
+  })
+
+  // The last regular room of a floor. One door, nothing beside it, nothing to weigh up -
+  // the choice was the room before this one.
+  it('replaces the whole choice with a single boss door', () => {
+    const doors = rollDoors(rng(0.99, 0.99, 0.99), BOSS_DOOR)
+
+    expect(doors).toHaveLength(1)
+    expect(doors[0].type).toBe('boss')
+  })
+
+  it('spends no roll on a boss door, because nothing about it is rolled', () => {
+    let calls = 0
+
+    rollDoors(() => {
+      calls += 1
+      return 0.5
+    }, BOSS_DOOR)
+
+    expect(calls).toBe(0)
+  })
+
+  // The two checkpoints. A shop is always on offer and is never the only thing on offer,
+  // so the guarantee is a resupply rather than a room the player is pushed into.
+  it('always puts a shop on a checkpoint room, and never only a shop', () => {
+    for (let room = 0; room < 20000; room++) {
+      const doors = rollDoors(Math.random, SHOP_GUARANTEED)
+      const types = doors.map((door) => door.type)
+
+      expect(types).toContain('shop')
+      expect(types.some((type) => type !== 'shop')).toBe(true)
+      expect(types.filter((type) => type === 'shop')).toHaveLength(1)
+    }
+  })
+
+  it('leaves a checkpoint roll alone when it already produced a shop', () => {
+    const doors = rollDoors(Math.random, SHOP_GUARANTEED)
+
+    expect(doors.filter((door) => door.type === 'shop')).toHaveLength(1)
+  })
+
+  it('does not always put the guaranteed shop in the same slot', () => {
+    const slots = new Set()
+
+    for (let room = 0; room < 5000; room++) {
+      slots.add(rollDoors(Math.random, SHOP_GUARANTEED).findIndex((d) => d.type === 'shop'))
+    }
+
+    expect(slots.size).toBeGreaterThan(1)
+  })
+})
+
+// Which of a room's doors are safe, which are the floor's traps, and which take their
+// chances. Separate from rolling the doors because it reads and advances the floor's
+// counters - a roll should not be the thing that moves state.
+describe('assignTwistDispositions', () => {
+  const doorsOf = (...types) => types.map((type) => ({ type, tier: 'easy' }))
+
+  it('marks a checkpoint shop as never twisting', () => {
+    const state = freshGameState()
+    const tagged = assignTwistDispositions(doorsOf('shop', 'combat'), state, SHOP_GUARANTEED)
+
+    expect(tagged[0].disposition).toBe(TWIST_NEVER)
+  })
+
+  // A checkpoint shop is not one of the floor's ordinary shops, so it must not move the
+  // counter the trap ordinal is measured against - or the trap would drift a door earlier
+  // every time a checkpoint went by.
+  it('does not count a checkpoint shop toward the trap ordinal', () => {
+    const state = freshGameState()
+
+    assignTwistDispositions(doorsOf('shop', 'combat'), state, SHOP_GUARANTEED)
+
+    expect(state.shopsSeen).toBe(0)
+  })
+
+  it('counts ordinary shop and puzzle doors as they are offered', () => {
+    const state = freshGameState()
+
+    assignTwistDispositions(doorsOf('shop', 'puzzle'), state, NORMAL_DOORS)
+
+    expect(state.shopsSeen).toBe(1)
+    expect(state.puzzlesSeen).toBe(1)
+  })
+
+  it('marks the ordinal-th ordinary shop as the floor trap', () => {
+    const state = freshGameState()
+
+    state.shopTrapOrdinal = 2
+
+    const first = assignTwistDispositions(doorsOf('shop', 'combat'), state, NORMAL_DOORS)
+    const second = assignTwistDispositions(doorsOf('shop', 'combat'), state, NORMAL_DOORS)
+
+    expect(first[0].disposition).toBe(TWIST_ROLLS)
+    expect(second[0].disposition).toBe(TWIST_TRAP)
+  })
+
+  it('marks the ordinal-th puzzle as the floor trap, independently of shops', () => {
+    const state = freshGameState()
+
+    state.puzzleTrapOrdinal = 1
+    state.shopTrapOrdinal = 2
+
+    const tagged = assignTwistDispositions(doorsOf('puzzle', 'shop'), state, NORMAL_DOORS)
+
+    expect(tagged[0].disposition).toBe(TWIST_TRAP)
+    expect(tagged[1].disposition).toBe(TWIST_ROLLS)
+  })
+
+  it('leaves combat and boss doors on the ordinary rules', () => {
+    const state = freshGameState()
+    const tagged = assignTwistDispositions(doorsOf('combat', 'boss'), state, NORMAL_DOORS)
+
+    tagged.forEach((door) => expect(door.disposition).toBe(TWIST_ROLLS))
+    expect(state.shopsSeen).toBe(0)
+    expect(state.puzzlesSeen).toBe(0)
+  })
+
+  it('tags at most one trap of each kind per floor', () => {
+    const state = freshGameState()
+
+    state.shopTrapOrdinal = 1
+
+    const traps = []
+
+    for (let room = 0; room < 6; room++) {
+      assignTwistDispositions(doorsOf('shop'), state, NORMAL_DOORS).forEach((door) => {
+        if (door.disposition === TWIST_TRAP) traps.push(door)
+      })
+    }
+
+    expect(traps).toHaveLength(1)
+  })
+
+  it('hands back every door it was given, tagged', () => {
+    const state = freshGameState()
+    const tagged = assignTwistDispositions(doorsOf('combat', 'shop', 'puzzle'), state, NORMAL_DOORS)
+
+    expect(tagged).toHaveLength(3)
+    tagged.forEach((door) => {
+      expect(door.type).toBeTruthy()
+      expect(door.disposition).toBeTruthy()
+    })
   })
 })

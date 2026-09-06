@@ -4,8 +4,7 @@ import {
   MAX_DOORS,
   ROOM_SHAPES,
   SHAPE_ROOM_CHANCE,
-  SHAPE_ROOM_FIRST,
-  SHAPE_ROOM_LAST,
+  SHAPE_EDGE_ROOMS,
   doorCapacity,
   floorCells,
   isFloor,
@@ -197,40 +196,74 @@ describe('rollRoomShape', () => {
     return () => values[i++]
   }
   const ids = Object.keys(ROOM_SHAPES)
-  const rooms = (from, to) =>
-    Array.from({ length: to - from + 1 }, (_, i) => from + i)
+  const rooms = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i)
 
-  it('leaves the rooms before the band as rectangles, whatever the roll says', () => {
-    rooms(1, SHAPE_ROOM_FIRST - 1).forEach((room) =>
-      expect(rollRoomShape(room, () => 0)).toBe(null)
-    )
+  // The band is a share of the floor now, not rooms 3-7 of the run. It used to be measured
+  // against the run-global room number, which meant floor 1 got big rooms and **every floor
+  // after it was rectangles all the way down** - the run counter was past 7 before floor 2
+  // began. Excluding the first and last two rooms of each floor gives every floor the same
+  // shape of experience: settle in, then anything, then a run-up to the boss.
+  it('leaves the first two rooms of any floor as rectangles', () => {
+    ;[7, 11, 15].forEach((floorRooms) => {
+      rooms(1, SHAPE_EDGE_ROOMS).forEach((room) =>
+        expect(rollRoomShape(room, floorRooms, () => 0)).toBe(null)
+      )
+    })
   })
 
-  it('leaves the rooms after the band as rectangles, whatever the roll says', () => {
-    rooms(SHAPE_ROOM_LAST + 1, SHAPE_ROOM_LAST + 6).forEach((room) =>
-      expect(rollRoomShape(room, () => 0)).toBe(null)
-    )
+  // The last two are the pre-boss shop checkpoint and the room whose doors the boss takes
+  // over. Neither is a place to drop a two-minute room.
+  it('leaves the last two rooms of any floor as rectangles', () => {
+    ;[7, 11, 15].forEach((floorRooms) => {
+      rooms(floorRooms - SHAPE_EDGE_ROOMS + 1, floorRooms).forEach((room) =>
+        expect(rollRoomShape(room, floorRooms, () => 0)).toBe(null)
+      )
+    })
   })
 
-  // The band is closed at both ends: room 3 and room 7 are in it, room 2 and room 8 are
-  // not. Off-by-one here would quietly move the whole feature by a room.
-  it('includes both ends of the band', () => {
-    expect(rollRoomShape(SHAPE_ROOM_FIRST, rng(0, 0))).toBe(ids[0])
-    expect(rollRoomShape(SHAPE_ROOM_LAST, rng(0, 0))).toBe(ids[0])
-    expect(rollRoomShape(SHAPE_ROOM_FIRST - 1, rng(0, 0))).toBe(null)
-    expect(rollRoomShape(SHAPE_ROOM_LAST + 1, rng(0, 0))).toBe(null)
+  it('includes both ends of the band, on every floor length', () => {
+    ;[7, 11, 15].forEach((floorRooms) => {
+      const first = SHAPE_EDGE_ROOMS + 1
+      const last = floorRooms - SHAPE_EDGE_ROOMS
+
+      expect(rollRoomShape(first, floorRooms, rng(0, 0))).toBe(ids[0])
+      expect(rollRoomShape(last, floorRooms, rng(0, 0))).toBe(ids[0])
+      expect(rollRoomShape(first - 1, floorRooms, rng(0, 0))).toBe(null)
+      expect(rollRoomShape(last + 1, floorRooms, rng(0, 0))).toBe(null)
+    })
+  })
+
+  // The whole point of the change: a floor deep in a run is as varied as floor 1.
+  it('gives every floor its own band, scaled to its own length', () => {
+    const eligible = (floorRooms) =>
+      rooms(1, floorRooms).filter((room) => rollRoomShape(room, floorRooms, rng(0, 0)) !== null)
+
+    expect(eligible(7)).toEqual([3, 4, 5])
+    expect(eligible(9)).toEqual([3, 4, 5, 6, 7])
+    expect(eligible(15)).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
+  })
+
+  // A floor short enough to be all edge has no middle to put a big room in. Not reachable
+  // today - the shortest floor is 7 - but the arithmetic should not produce a band that
+  // runs backwards if one ever is.
+  it('offers no band at all on a floor with no middle', () => {
+    ;[1, 2, 3, 4].forEach((floorRooms) => {
+      rooms(1, floorRooms).forEach((room) =>
+        expect(rollRoomShape(room, floorRooms, () => 0)).toBe(null)
+      )
+    })
   })
 
   it('is a rectangle on the miss side of the chance and a shape on the hit side', () => {
-    rooms(SHAPE_ROOM_FIRST, SHAPE_ROOM_LAST).forEach((room) => {
-      expect(rollRoomShape(room, rng(SHAPE_ROOM_CHANCE))).toBe(null)
-      expect(rollRoomShape(room, rng(SHAPE_ROOM_CHANCE - 0.001, 0))).not.toBe(null)
+    rooms(3, 5).forEach((room) => {
+      expect(rollRoomShape(room, 7, rng(SHAPE_ROOM_CHANCE))).toBe(null)
+      expect(rollRoomShape(room, 7, rng(SHAPE_ROOM_CHANCE - 0.001, 0))).not.toBe(null)
     })
   })
 
   it('only ever names a shape that exists', () => {
     for (let i = 0; i < 400; i++) {
-      const rolled = rollRoomShape(5, Math.random)
+      const rolled = rollRoomShape(4, 7, Math.random)
 
       if (rolled !== null) {
         expect(ROOM_SHAPES[rolled]).toBeDefined()
@@ -243,8 +276,7 @@ describe('rollRoomShape', () => {
 
     ids.forEach((_, index) => {
       // second roll picks the shape: index/ids.length lands squarely on that id
-      const rolled = rollRoomShape(4, rng(0, index / ids.length))
-      seen[rolled] = true
+      seen[rollRoomShape(4, 7, rng(0, index / ids.length))] = true
     })
 
     expect(Object.keys(seen).sort()).toEqual([...ids].sort())
@@ -255,7 +287,7 @@ describe('rollRoomShape', () => {
     const runs = 4000
 
     for (let i = 0; i < runs; i++) {
-      if (rollRoomShape(5, Math.random) !== null) {
+      if (rollRoomShape(4, 7, Math.random) !== null) {
         shaped += 1
       }
     }
@@ -264,15 +296,9 @@ describe('rollRoomShape', () => {
     expect(shaped / runs).toBeLessThan(SHAPE_ROOM_CHANCE + 0.05)
   })
 
-  // Across a whole run the band is what varies: the opening and the deep rooms are
-  // always rectangles, so a run reads as "normal, normal, then who knows".
-  it('gives a run a shaped middle and rectangular ends', () => {
-    const run = rooms(1, 12).map((room) => rollRoomShape(room, () => 0) === null)
+  it('gives a floor a shaped middle and rectangular ends', () => {
+    const floor = rooms(1, 7).map((room) => rollRoomShape(room, 7, () => 0) === null)
 
-    expect(run).toEqual([
-      true, true,
-      false, false, false, false, false,
-      true, true, true, true, true
-    ])
+    expect(floor).toEqual([true, true, false, false, false, true, true])
   })
 })

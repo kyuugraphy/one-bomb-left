@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { ENTRANCE_PLAN, MAX_TWIST_CAP, roomPlanFor } from './doors.js'
+import { FLOOR_ONE_ROOMS, TRAP_ORDINAL_MAX, floorSize } from './floors.js'
 import { addExp } from './currency.js'
 import { grantItem } from './grant.js'
 import { countOwned, passiveCounts } from './inventory.js'
 import { getItem } from './items.js'
-import { freshGameState, recordTwist, roomFor } from './run.js'
+import { advanceFloor, freshGameState, recordTwist, roomFor } from './run.js'
 
 // A run part-way through: some EXP banked, an item in the rack, some bombs, four rooms
 // deep and standing in a hard shaped room.
@@ -401,5 +402,176 @@ describe('roomFor - a corridor on the way somewhere', () => {
 
     expect(corridor.twisted).toBe(null)
     expect(corridor.pending.twisted).toEqual(destination.twisted)
+  })
+})
+
+// A run has floors now. What that adds to gameState is a second set of counters beside the
+// run-global ones - and keeping them separate is the point, not an accident.
+describe('the floor a run is on', () => {
+  it('starts on floor 1, seven rooms long, in its first room', () => {
+    const state = freshGameState()
+
+    expect(state.floorNumber).toBe(1)
+    expect(state.floorRooms).toBe(FLOOR_ONE_ROOMS)
+    expect(state.roomOnFloor).toBe(1)
+  })
+
+  // Two traps per floor, rolled independently: one among the ordinary shop doors and one
+  // among the puzzle doors. Separate ordinals and separate counters, because a shared one
+  // would tie the two together - the puzzle trap would land wherever the shop trap did.
+  it('rolls the floor a trap for shops and another for puzzles', () => {
+    for (let i = 0; i < 500; i++) {
+      const state = freshGameState()
+
+      ;[state.shopTrapOrdinal, state.puzzleTrapOrdinal].forEach((ordinal) => {
+        expect(ordinal).toBeGreaterThanOrEqual(1)
+        expect(ordinal).toBeLessThanOrEqual(TRAP_ORDINAL_MAX(FLOOR_ONE_ROOMS))
+      })
+
+      expect(state.shopsSeen).toBe(0)
+      expect(state.puzzlesSeen).toBe(0)
+    }
+  })
+
+  it('rolls the two ordinals independently of each other', () => {
+    const pairs = new Set()
+
+    for (let i = 0; i < 2000; i++) {
+      const state = freshGameState()
+
+      pairs.add(state.shopTrapOrdinal + ',' + state.puzzleTrapOrdinal)
+    }
+
+    // a 7-room floor has ordinals 1-2, so all four combinations must appear
+    expect(pairs.size).toBe(4)
+  })
+
+  // The stand-in is retired. corridorDoors used to be rolled against a made-up floor of 10
+  // doors, once per run, which is why a run past its tenth door stopped meeting corridors.
+  it('rolls corridors against the real length of floor 1, not a stand-in', () => {
+    for (let i = 0; i < 500; i++) {
+      const { corridorDoors } = freshGameState()
+
+      corridorDoors.forEach((door) => {
+        expect(door).toBeGreaterThanOrEqual(0)
+        expect(door).toBeLessThan(FLOOR_ONE_ROOMS)
+      })
+    }
+  })
+})
+
+describe('advanceFloor', () => {
+  it('moves to the next floor and re-rolls its length', () => {
+    const state = freshGameState()
+
+    advanceFloor(state, () => 0)
+
+    expect(state.floorNumber).toBe(2)
+    expect(state.floorRooms).toBe(floorSize(2, () => 0))
+  })
+
+  it('puts the player back in room 1 of the new floor', () => {
+    const state = freshGameState()
+
+    state.roomOnFloor = 7
+
+    advanceFloor(state, Math.random)
+
+    expect(state.roomOnFloor).toBe(1)
+  })
+
+  it('deals the new floor both traps, and forgets what the last one had seen', () => {
+    const state = freshGameState()
+
+    state.shopsSeen = 4
+    state.puzzlesSeen = 3
+
+    advanceFloor(state, Math.random)
+
+    expect(state.shopsSeen).toBe(0)
+    expect(state.puzzlesSeen).toBe(0)
+    ;[state.shopTrapOrdinal, state.puzzleTrapOrdinal].forEach((ordinal) => {
+      expect(ordinal).toBeGreaterThanOrEqual(1)
+      expect(ordinal).toBeLessThanOrEqual(TRAP_ORDINAL_MAX(state.floorRooms))
+    })
+  })
+
+  // Both halves matter. Re-rolling without resetting doorsTaken would index the new list
+  // with the old floor's door count and skip most of it.
+  it('re-rolls corridors for the new floor and resets the door count with them', () => {
+    const state = freshGameState()
+
+    state.doorsTaken = 9
+
+    advanceFloor(state, Math.random)
+
+    expect(state.doorsTaken).toBe(0)
+    state.corridorDoors.forEach((door) => {
+      expect(door).toBeLessThan(state.floorRooms)
+    })
+  })
+
+  it('keeps corridors coming on every floor, not just the first', () => {
+    const state = freshGameState()
+
+    for (let floor = 2; floor <= 8; floor++) {
+      advanceFloor(state, Math.random)
+
+      expect(state.corridorDoors.length).toBeGreaterThan(0)
+    }
+  })
+
+  // roomNumber is the run's depth and is deliberately not reset: the big-room band is
+  // measured against it, so restarting it every floor would make rooms 3-7 of every floor
+  // a coin flip and every later room a rectangle.
+  it('leaves the run-global counters alone', () => {
+    const state = freshGameState()
+
+    state.roomNumber = 12
+    state.exp = 30
+    state.bombCount = 2
+    state.twistCap = 3
+    state.twistsSoFar = 2
+
+    advanceFloor(state, Math.random)
+
+    expect(state.roomNumber).toBe(12)
+    expect(state.exp).toBe(30)
+    expect(state.bombCount).toBe(2)
+  })
+
+  // The twist budget is a property of the run, not of the floor. Re-dealing it every floor
+  // would turn "some runs are never ambushed" into "some floors are", which is a different
+  // and much weaker promise.
+  it('does not re-deal the twist budget', () => {
+    const state = freshGameState()
+
+    state.twistCap = 3
+    state.twistsSoFar = 2
+
+    advanceFloor(state, Math.random)
+
+    expect(state.twistCap).toBe(3)
+    expect(state.twistsSoFar).toBe(2)
+  })
+
+  it('keeps the inventory across the boss', () => {
+    const state = freshGameState()
+    const inventory = state.inventory
+
+    advanceFloor(state, Math.random)
+
+    expect(state.inventory).toBe(inventory)
+  })
+
+  it('goes on dealing floors past floor 7', () => {
+    const state = freshGameState()
+
+    for (let floor = 2; floor <= 12; floor++) {
+      advanceFloor(state, Math.random)
+
+      expect(state.floorNumber).toBe(floor)
+      expect(state.floorRooms).toBeGreaterThanOrEqual(7)
+    }
   })
 })

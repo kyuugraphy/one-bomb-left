@@ -27,20 +27,29 @@ export function doorCapacity(span) {
   return Math.min(MAX_DOORS, Math.floor((span + DOOR_GAP) / (DOOR_CELLS + DOOR_GAP)))
 }
 
-// Which shape a room gets, or null for an ordinary rectangle. Big rooms are a mid-run
-// event rather than the whole run: the first two rooms are where the game is learned, and
-// a space you can see all of at once is the right place to learn it; by the eighth a run
-// is long enough that a two-minute room every time would drag. In between, a room is a
-// coin flip, and when it comes up big the four shapes are an even draw.
+// Which shape a room gets, or null for an ordinary rectangle. Big rooms belong to the
+// middle of a floor: the first rooms are where a floor is settled into, and a space you can
+// see all of at once is the right place to do that; the last are the pre-boss shop and the
+// room whose doors the boss takes over, neither of which is a place for a two-minute room.
+// In between, a room is a coin flip, and when it comes up big the four shapes draw evenly.
+//
+// **Measured against the room's position on its floor, not the run's total.** It used to be
+// rooms 3-7 of the run, which meant floor 1 got big rooms and every floor after it was
+// rectangles all the way down - the run counter was past 7 before floor 2 started. A share
+// of the floor gives every floor the same shape of experience regardless of its length, and
+// it is the same "safe middle band" the corridors and the shop checkpoints already use
+// rather than a third convention.
 //
 // Note a miss costs one roll and a hit costs two, so a caller queueing rolls has to know
 // which way this one went.
-export const SHAPE_ROOM_FIRST = 3
-export const SHAPE_ROOM_LAST = 7
+export const SHAPE_EDGE_ROOMS = 2
 export const SHAPE_ROOM_CHANCE = 0.5
 
-export function rollRoomShape(roomNumber, randomFn) {
-  if (roomNumber < SHAPE_ROOM_FIRST || roomNumber > SHAPE_ROOM_LAST) {
+export function rollRoomShape(roomOnFloor, floorRooms, randomFn) {
+  // A floor short enough to be all edge has no middle to put a big room in. Not reachable
+  // today, since the shortest floor is seven, but the arithmetic should not hand back a
+  // band that runs backwards if one ever is.
+  if (roomOnFloor <= SHAPE_EDGE_ROOMS || roomOnFloor > floorRooms - SHAPE_EDGE_ROOMS) {
     return null
   }
 

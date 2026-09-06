@@ -21,16 +21,20 @@ import {
   shelfLabelFor
 } from './shop.js'
 import {
+  BOSS_PLAN,
   DOOR_STYLE,
+  ENTRANCE_PLAN,
   TIER_GLOW,
   TWISTED_PLAN,
+  assignTwistDispositions,
   pickTwistLine,
   rollTwist,
   roomPlanFor,
   rollDoors
 } from './doors.js'
+import { BOSS_DOOR, doorPolicyFor } from './floors.js'
 import { DEBUFF_DROP, rollRoomDrop } from './drops.js'
-import { recordTwist, roomFor } from './run.js'
+import { advanceFloor, recordTwist, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
 import { NEIGHBOURS, generateObstacles, rollCoverage } from './obstacles.js'
 import { generateCorridorObstacles, generateCorridorRoom } from './corridor.js'
@@ -419,6 +423,10 @@ export class PlayScene extends Phaser.Scene {
 
     this.doors = []
     this.corridorExit = null
+    // Reset for the same reason corridorExit is: Phaser reuses the scene instance across
+    // restart, so a pad left over from the last room would have the next one reporting
+    // its boss already beaten before the player had taken a step.
+    this.floorExit = null
     this.leaving = false
 
     this.buildWalls(width, height)
@@ -1668,8 +1676,9 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
-    // A corridor opened its way on already; nothing else to do until it is walked into.
-    if (this.corridorExit) {
+    // A corridor or a beaten boss opened its way on already; nothing else to do until it
+    // is walked into.
+    if (this.corridorExit || this.floorExit) {
       return
     }
 
@@ -1680,7 +1689,62 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    if (this.roomType === 'boss') {
+      this.openFloorExit()
+      return
+    }
+
     this.openDoors()
+  }
+
+  // The way down, once the boss is beaten. The same plain pad the corridor's exit uses and
+  // for the same reason: there is nothing to choose here, so there is nothing to telegraph.
+  //
+  // **The boss room is a stub** - empty, cleared on the frame it opens - so this is really
+  // proving the trigger and the transition rather than rewarding a fight. That is the whole
+  // of what it is meant to do today.
+  //
+  // TODO: beating a boss should eventually open a **cutscene and a memory unlock**, not
+  // just a door to the next floor. That is lore and narrative content and needs its own
+  // design pass before anything is built - deliberately not stubbed here, because a
+  // half-built cutscene hook is harder to replace than an honest plain door. See the entry
+  // in zz_todo.md.
+  openFloorExit() {
+    const spot = this.freeSpotNear(this.player.x, this.player.y)
+
+    this.floorExit = this.add.rectangle(
+      spot.x,
+      spot.y,
+      EXIT_SIZE,
+      EXIT_SIZE,
+      CORRIDOR_EXIT_COLOR,
+      CORRIDOR_EXIT_ALPHA
+    )
+    this.floorExit.setStrokeStyle(CORRIDOR_EXIT_STROKE, CORRIDOR_EXIT_COLOR)
+    this.physics.add.existing(this.floorExit)
+    this.floorExit.body.setAllowGravity(false)
+    this.floorExit.body.setImmovable(true)
+    this.physics.add.overlap(this.player, this.floorExit, () => this.descend(), null, this)
+
+    this.toast(`floor ${this.gameState.floorNumber} cleared - the way down is open`, '#86efac')
+  }
+
+  // Down a floor. advanceFloor re-deals everything belonging to the floor - its length, its
+  // two traps, its corridors - and leaves the run's own counters alone, so the inventory,
+  // the EXP and the twist budget all come with you.
+  descend() {
+    if (this.leaving) {
+      return
+    }
+
+    this.leaving = true
+
+    advanceFloor(this.gameState, Math.random)
+
+    this.scene.restart({
+      plan: ENTRANCE_PLAN,
+      carried: { gameState: this.gameState, health: this.health }
+    })
   }
 
   // The far end of a corridor, once its enemies are down. Not a door: no pad, no colour,
@@ -1789,7 +1853,17 @@ export class PlayScene extends Phaser.Scene {
   // to something possibly different from what it advertised; it no longer can, so what is
   // painted here is simply what is behind it.
   openDoors() {
-    const rolled = rollDoors(Math.random)
+    // What this room of this floor is allowed to offer: the boss takes the last regular
+    // room's choice outright, the two checkpoints guarantee a shop beside a real door, and
+    // everything else rolls freely.
+    const policy = doorPolicyFor(this.gameState.roomOnFloor, this.gameState.floorRooms)
+    // Tagged after rolling, not during: the tagging reads and advances the floor's shop and
+    // puzzle counters, and a roll should not be the thing that moves state.
+    const rolled = assignTwistDispositions(
+      rollDoors(Math.random, policy),
+      this.gameState,
+      policy
+    )
     const spots = this.pickDoorSpots(rolled.length)
 
     // The spots are the truth: a shaped room's exit tips seat what doorCapacity() said
@@ -1837,7 +1911,7 @@ ${advertised.tier}`, {
 
     // Unarmed until the player is clear of it - see updateDoorArming. A door that opened
     // under the player's feet would otherwise be taken on the frame it appeared.
-    const door = { advertised, pad, text, pulse, armed: false }
+    const door = { advertised, disposition: advertised.disposition, pad, text, pulse, armed: false }
 
     this.physics.add.overlap(this.player, pad, () => this.takeDoor(door), null, this)
 
@@ -1958,7 +2032,9 @@ ${advertised.tier}`, {
     this.leaving = true
     this.doors.forEach((other) => this.closeDoor(other))
 
-    const plan = roomPlanFor(door.advertised)
+    // The boss is spelled out rather than looked up - no roll produced it, so roomPlanFor
+    // has no entry for it, the same as the entrance and the corridor.
+    const plan = door.advertised.type === 'boss' ? BOSS_PLAN : roomPlanFor(door.advertised)
 
     // Whether this room turns hostile. Rolled here rather than on arrival, alongside the
     // plan and the shape, so the room is settled before the scene starts - the same place
@@ -1966,11 +2042,15 @@ ${advertised.tier}`, {
     // when the doors were rolled: two or three doors were offered and this is the only one
     // the player will ever stand in, so charging the budget for the others would spend it
     // on rooms nobody saw.
-    const twisted = rollTwist(plan, this.gameState, Math.random)
+    const twisted = rollTwist(plan, this.gameState, Math.random, door.disposition)
 
     recordTwist(this.gameState, plan, twisted)
 
     this.gameState.roomNumber += 1
+    // Beside roomNumber rather than instead of it. roomNumber is how deep the run is;
+    // roomOnFloor is where you stand on this floor, and the boss and the checkpoints are
+    // measured against the second one.
+    this.gameState.roomOnFloor += 1
 
     const destination = {
       plan: twisted ? TWISTED_PLAN : plan,
@@ -1982,16 +2062,28 @@ ${advertised.tier}`, {
       // see shelfSpots, which measures in screens - and a shop that turns into a fight
       // stays the room the player thought they were walking into. Reading the twisted plan
       // here would hand a twisted shop a big-room silhouette it never advertised.
+      // A shop lays its stock along one line and a boss room is a stub, so neither takes a
+      // silhouette. Everything else is measured against its position on the floor, so a
+      // deep floor is as varied as the first one.
       shape:
-        plan.roomType === 'shop'
+        plan.roomType === 'shop' || plan.roomType === 'boss'
           ? null
-          : rollRoomShape(this.gameState.roomNumber, Math.random)
+          : rollRoomShape(
+              this.gameState.roomOnFloor,
+              this.gameState.floorRooms,
+              Math.random
+            )
     }
 
     // Whether a corridor sits behind this door was decided when the floor was rolled, and
     // the door itself knows nothing about it: its colour and its glow are the destination's
     // and always were. The corridor is spliced in front, and the destination waits.
-    const corridorAhead = this.gameState.corridorDoors.includes(this.gameState.doorsTaken)
+    // **Never behind the boss door.** A hallway between the last room and the boss would
+    // put a pause exactly where the run should be tightening, and the boss door is the one
+    // door that is not a choice - there is nothing for a corridor to delay the reveal of.
+    const corridorAhead =
+      door.advertised.type !== 'boss' &&
+      this.gameState.corridorDoors.includes(this.gameState.doorsTaken)
 
     this.gameState.doorsTaken += 1
 
@@ -2015,6 +2107,11 @@ ${advertised.tier}`, {
     // A corridor has no door style to read a label off, because no door type leads to one.
     if (this.roomType === 'corridor') {
       this.toast('a corridor', '#94a3b8')
+      return
+    }
+
+    if (this.roomType === 'boss') {
+      this.toast(`FLOOR ${this.gameState.floorNumber} BOSS`, '#f87171')
       return
     }
 
@@ -2701,7 +2798,14 @@ ${advertised.tier}`, {
     // How deep the run is, beside the wallet. Big rooms only happen in a band of the run,
     // so "which room is this" stopped being trivia the moment the band existed.
     this.hudExpText.setText(
-      `ROOM ${this.gameState.roomNumber}   EXP ${this.gameState.exp}   BOMBS ${this.gameState.bombCount}`
+      // The boss room sits past the floor's last numbered room, so counting it would read
+      // as 8/7. It gets the word instead of the number.
+      `FLOOR ${this.gameState.floorNumber}` +
+        (this.roomType === 'boss'
+          ? '  BOSS'
+          : `-${this.gameState.roomOnFloor}/${this.gameState.floorRooms}`) +
+        `   ROOM ${this.gameState.roomNumber}   EXP ${this.gameState.exp}` +
+        `   BOMBS ${this.gameState.bombCount}`
     )
     // Asked of the inventory rather than inferred from damage > 1: stacked passives raise
     // damage on their own now, so that test lit the readout up with no set equipped.

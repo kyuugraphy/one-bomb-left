@@ -9,12 +9,17 @@
 // `restart()` is called with no argument at all, so the previous room's payload comes
 // straight back - which is why every fresh-run restart passes `{}` explicitly.
 
-import { CORRIDOR_FLOOR_DOORS, rollCorridorDoors } from './corridor.js'
+import { rollCorridorDoors } from './corridor.js'
+import { floorSize, rollTrapOrdinal } from './floors.js'
 import { ENTRANCE_PLAN, canTwist, rollTwistCap } from './doors.js'
 import { createInventory } from './inventory.js'
 
 // The run's own state, everything that survives a door and nothing that survives a death.
 export function freshGameState(randomFn = Math.random) {
+  // Rolled once and reused: floor 1 is fixed so this spends nothing, but calling it
+  // three times would read as three separate decisions.
+  const floorRooms = floorSize(1, randomFn)
+
   return {
     exp: 0,
     bombCount: 0,
@@ -39,9 +44,27 @@ export function freshGameState(randomFn = Math.random) {
     // without costing a room. roomNumber counts rooms, this counts doors, and the two
     // drift apart by exactly the number of corridors walked.
     doorsTaken: 0,
+    // ---- the floor ----
+    //
+    // A second set of counters beside the run-global ones above, and the separation is the
+    // point rather than an accident: roomNumber is how deep the run is and drives the
+    // big-room band, while roomOnFloor is where you are on this floor and drives the boss
+    // and the shop checkpoints. Resetting the first every floor would make rooms 3-7 of
+    // every floor a coin flip for a big room and every later room a rectangle.
+    floorNumber: 1,
+    floorRooms,
+    roomOnFloor: 1,
+    // Which ordinary shop door and which puzzle door of this floor are the traps, and how
+    // many of each have been offered so far. Two ordinals rolled independently, because a
+    // shared one would tie them together and land both traps at the same position on the
+    // floor. All four belong to the floor and are re-dealt with it.
+    shopTrapOrdinal: rollTrapOrdinal(floorRooms, randomFn),
+    puzzleTrapOrdinal: rollTrapOrdinal(floorRooms, randomFn),
+    shopsSeen: 0,
+    puzzlesSeen: 0,
     // Which door-takings of this floor have a corridor behind them, rolled once at the
     // start. See rollCorridorDoors for why up front rather than per door.
-    corridorDoors: rollCorridorDoors(CORRIDOR_FLOOR_DOORS, randomFn),
+    corridorDoors: rollCorridorDoors(floorRooms, randomFn),
     inventory: createInventory(),
     cooldowns: {}
   }
@@ -68,6 +91,36 @@ export function recordTwist(gameState, plan, twisted) {
   }
 
   return twisted
+}
+
+// Down the stairs. Everything belonging to the floor is re-dealt and everything belonging
+// to the run is left alone.
+//
+// **The twist budget is deliberately not re-dealt.** It is a property of the run - some
+// runs are never ambushed at all, and the player cannot know which run they are in until
+// it is over. Re-dealing it every floor would turn that into "some floors are never
+// ambushed", which is a weaker promise the player would learn to read off the floor number.
+//
+// The corridor list is re-rolled here and **doorsTaken is reset with it**, because the two
+// are one thing: the list is a set of indices into this floor's door-takings, so re-rolling
+// without resetting would index a fresh list with the last floor's count and skip most of
+// it. Before floors existed the list was rolled once per run against a made-up ten-door
+// floor, which is why a run stopped meeting corridors after its tenth door.
+//
+// Roll order is the contract a test queues against: the floor's length, then its shop
+// trap, then its puzzle trap, then its corridors.
+export function advanceFloor(gameState, randomFn = Math.random) {
+  gameState.floorNumber += 1
+  gameState.floorRooms = floorSize(gameState.floorNumber, randomFn)
+  gameState.roomOnFloor = 1
+  gameState.shopTrapOrdinal = rollTrapOrdinal(gameState.floorRooms, randomFn)
+  gameState.puzzleTrapOrdinal = rollTrapOrdinal(gameState.floorRooms, randomFn)
+  gameState.shopsSeen = 0
+  gameState.puzzlesSeen = 0
+  gameState.corridorDoors = rollCorridorDoors(gameState.floorRooms, randomFn)
+  gameState.doorsTaken = 0
+
+  return gameState
 }
 
 // Unpack a restart payload into the room to build. `health: null` means "as much as this

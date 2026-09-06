@@ -1,3 +1,5 @@
+import { BOSS_DOOR, NORMAL_DOORS, SHOP_GUARANTEED } from './floors.js'
+
 // The door telegraph, and the one surprise left in it.
 //
 // **A door never lies.** It says what kind of room is behind it and how hard that room
@@ -59,7 +61,14 @@ export const TIERS = ['easy', 'medium', 'hard']
 //
 // Tiers are rolled per door and independently, so "both ways on are hard" is a hand the
 // player can be dealt.
-export function rollDoors(randomFn) {
+export function rollDoors(randomFn, policy = NORMAL_DOORS) {
+  // The last regular room of a floor. One door, nothing beside it, nothing rolled - the
+  // choice was the room before this one, and offering an alternative here would make the
+  // boss something a player could decline indefinitely.
+  if (policy === BOSS_DOOR) {
+    return [{ type: 'boss', tier: BOSS_PLAN.tier }]
+  }
+
   const count = rollDoorCount(randomFn)
   const pool = [...REWARD_TYPES]
   const doors = []
@@ -77,7 +86,69 @@ export function rollDoors(randomFn) {
     doors.push({ type, tier: TIERS[Math.floor(randomFn() * TIERS.length)] })
   }
 
-  return doors
+  return policy === SHOP_GUARANTEED ? withGuaranteedShop(doors, randomFn) : doors
+}
+
+// A checkpoint room always has a shop on offer and never *only* a shop. The guarantee is a
+// resupply the player can count on, not a room they are pushed into - so one slot is turned
+// over to the shop and the rest are left alone.
+//
+// Rolling a slot rather than taking the first keeps the shop from always sitting in the
+// same place, which would be a tell for which rooms are checkpoints. A room offers two or
+// three doors and shop is capped at one, so replacing exactly one always leaves at least
+// one real door beside it.
+function withGuaranteedShop(doors, randomFn) {
+  if (doors.some((door) => door.type === 'shop')) {
+    return doors
+  }
+
+  const slot = Math.floor(randomFn() * doors.length)
+
+  return doors.map((door, index) => (index === slot ? { ...door, type: 'shop' } : door))
+}
+
+// Which of a room's doors are safe, which are the floor's traps, and which take their
+// chances. **Separate from rolling the doors**, because it reads and advances the floor's
+// counters and a roll should not be the thing that moves state.
+//
+// The counters advance on doors *offered*, not doors taken: "the second ordinary shop door
+// of this floor" is a fact about what the floor showed you, and a player who walks past one
+// has still been shown it.
+//
+// A checkpoint shop is deliberately not counted. It is not one of the floor's ordinary
+// shops, and counting it would drag the trap a door earlier every time a checkpoint went by.
+export function assignTwistDispositions(doors, gameState, policy = NORMAL_DOORS) {
+  let checkpointTaken = policy !== SHOP_GUARANTEED
+
+  return doors.map((door) => {
+    if (door.type === 'shop' && !checkpointTaken) {
+      checkpointTaken = true
+
+      return { ...door, disposition: TWIST_NEVER }
+    }
+
+    if (door.type === 'shop') {
+      gameState.shopsSeen += 1
+
+      return {
+        ...door,
+        disposition:
+          gameState.shopsSeen === gameState.shopTrapOrdinal ? TWIST_TRAP : TWIST_ROLLS
+      }
+    }
+
+    if (door.type === 'puzzle') {
+      gameState.puzzlesSeen += 1
+
+      return {
+        ...door,
+        disposition:
+          gameState.puzzlesSeen === gameState.puzzleTrapOrdinal ? TWIST_TRAP : TWIST_ROLLS
+      }
+    }
+
+    return { ...door, disposition: TWIST_ROLLS }
+  })
 }
 
 // What each tag actually means once the room is built. Enemy counts are per tier, and
@@ -143,6 +214,22 @@ export const ENTRANCE_ENEMIES = 1
 export const ENTRANCE_PLAN = {
   ...roomPlanFor(ENTRANCE_DOOR),
   enemyCount: ENTRANCE_ENEMIES
+}
+
+// The room at the end of a floor. **A stub**, exactly as the puzzle room is one: empty, no
+// enemies, nothing to clear, and it exists so the trigger and the transition can be proven
+// before there is a fight to put in it.
+//
+// Spelled out rather than looked up, like ENTRANCE_PLAN and CORRIDOR_PLAN above it, and for
+// the same reason - no door roll produced it, so it is not an answer to a roll and does not
+// belong in the table of them. 'hard' is the tier the pad is drawn at; nothing reads it for
+// difficulty while the room is empty.
+export const BOSS_PLAN = {
+  type: 'boss',
+  tier: 'hard',
+  roomType: 'boss',
+  enemyCount: 0,
+  enemyStrengthBonus: 0
 }
 
 // ---- the twist -----------------------------------------------------------------------
@@ -263,12 +350,44 @@ export function pickTwistLine(lastLine, randomFn) {
 //
 // Nothing is rolled for a room that could never twist, so a caller queueing rolls does not
 // have to know which types are eligible or what the run's budget looks like.
-export function rollTwist(plan, run, randomFn) {
-  if (!canTwist(plan) || mustStaySafe(run)) {
+// How a particular door is disposed toward twisting. **The plan cannot carry this**: a
+// checkpoint shop and an ordinary shop have identical plans - same type, same tier - so
+// canTwist(plan) cannot tell them apart. It rides on the door, decided when doors are
+// built, and nothing about it is visible: all three look exactly alike.
+export const TWIST_NEVER = 'never'
+export const TWIST_TRAP = 'trap'
+export const TWIST_ROLLS = 'rolls'
+
+export function rollTwist(plan, run, randomFn, disposition = TWIST_ROLLS) {
+  // The plan stays a hard gate even for a trap door. A fight that becomes a fight is not
+  // an ambush, so a disposition attached to the wrong kind of door fails closed rather
+  // than producing a twist that means nothing.
+  if (!canTwist(plan)) {
     return false
   }
 
-  return randomFn() < TWIST_CHANCE
+  if (disposition === TWIST_NEVER) {
+    return false
+  }
+
+  // **A trap is guaranteed to exist, not guaranteed to fire.** The fairness rules gate it
+  // exactly as they gate a 1% twist: walk into the floor's trap on a spent budget, or on
+  // the room after a twist, and it resolves as an ordinary safe room with no sign that
+  // anything was ever meant to happen there.
+  //
+  // It is called TWIST_TRAP rather than TWIST_ALWAYS for that reason - it was the latter
+  // for one build, and a constant named "always" that does not always fire is a comment
+  // that lies in the one place nobody rereads.
+  //
+  // Measured: about three fifths of the traps a player walks into fizzle, and a run dealt
+  // twistCap 0 - one in five - never sees one fire. The cap, not the traps, is what
+  // decides how many ambushes a run contains.
+  if (mustStaySafe(run)) {
+    return false
+  }
+
+  // The whole of what makes a trap a trap: it skips the roll every other door has to pass.
+  return disposition === TWIST_TRAP || randomFn() < TWIST_CHANCE
 }
 
 // Glow is the tier, and that is now the only channel that carries a gamble. Colour still
@@ -286,6 +405,12 @@ export function rollTwist(plan, run, randomFn) {
 // of the door vocabulary as it always has - it is what damage and enemies are painted in.
 export const DOOR_STYLE = {
   combat: { color: 0xcbd5e1, label: 'COMBAT' },
+  // Red, which the rest of the door vocabulary deliberately avoids because it is what
+  // damage and enemies are painted in. The boss door is the one place that reads as a
+  // feature rather than a collision: it is never offered beside another door, so there is
+  // nothing for it to be confused with, and "the colour of things that hurt you" is
+  // exactly what it means.
+  boss: { color: 0xef4444, label: 'BOSS' },
   shop: { color: 0xfbbf24, label: 'SHOP' },
   puzzle: { color: 0xf472b6, label: 'PUZZLE' }
 }
