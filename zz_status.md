@@ -6,7 +6,34 @@ _Last updated: 2026-09-06_
 
 **Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
 
-## Latest session (2026-09-06, fourth pass) — boss arenas, shop statues, and one trap a floor
+## Latest session (2026-09-06, fifth pass) — the avatar turns, and the world settles at 1:1
+The scene half of this is **not committed** - `PlayScene.js` also carries the held-back wiring from the pass below, and the two cannot be separated. Everything here runs; only the file it lives in is waiting.
+
+**She is four drawings now, and faces the way she shoots.** `av_left/right/up/down.png`, picked off the arrow keys. Movement is WASD and does not turn her, so you can back away from something while still facing it. The aim is read **before** the fire-cooldown check - gating the turn on the cooldown would leave her looking the old way for up to 360 ms after you turned. A diagonal resolves to the larger component, and a true diagonal ties to the horizontal, because the side poses read as facing far more strongly than the up one does.
+
+**The four poses do not trim to the same box**, so scale and hitbox are recomputed together on every turn, holding her height constant. Without that she would change size as she turned and her body would drift off the drawing.
+
+**What is drawn is what collides.** The body used to be deliberately smaller than the sprite - the fair-hits argument in the `PLAYER_HITBOX` comment - and the cost was that the art overlapped every wall she walked up to. The Arcade body now defaults to the whole sprite, in both axes, so no overhang is possible by construction rather than by picking a matching number. The cost is real and is recorded in the code: she takes hits on her hair and her hem.
+
+**The world was rescaled four times and came back to where it started.** 4x (a 224 px cell) made a room six cells of viewport and turned combat into shooting the whole screen; 1.68x - a 94 px cell, the player's own size - still overflowed the canvas; 0.56x fit the room inside the screen with a dead margin and shrank her to an unreadable 31 px. **A 24x15 room at 56 px is exactly 1344x840, which is the canvas**, so filling the screen pins the cell to 56 and every spatial number to its original value. The route and why each step was rejected are in the `WORLD_SCALE` comment, so it does not get re-walked.
+
+Two things survive from the detour, because they were right independently: `bullets.test.js` measures the room in cells rather than a hardcoded 1344, and derives the enemy shot speed as `320 * 0.65` rather than restating 208.
+
+**`keyOutBlack()` is gone, replaced by `trimTransparent()`.** The first avatar export was RGB on opaque black; every export since carries a real alpha channel, and **keying black would now be destructive** - `av_full.png` is 13.6% near-black *opaque* pixels, which is her hair and her dress. Alpha is the only thing consulted. The trim threshold is 16, not zero: the exports carry a faint halo of nearly-transparent pixels reaching almost to the canvas edge, and trimming on "any alpha at all" keeps 1157 px of a 1254 px image and does nothing.
+
+**Room art: `wall_tight`, `rock_tight`, `pit_tight`, one PNG to one block.** `TILE_CELLS` went 4 to 1 - at 4 a block showed a quarter of the art and the drawing came out larger than the cell it sat in. Rocks and pits take **a rolled ±5 degrees per cell**, so a clump reads as a mass rather than one stamp in a grid; each tile is drawn oversized by `cos(a) + sin(a)` so the turn does not bare the cell's corners. All three textures get a **2% corner radius**, cut out of the alpha so what is behind shows through.
+
+**The wall's gaps were the backing slab, not the texture.** The art has a ragged silhouette with transparent breaks, and the slab behind it was slate `0x4b5563` - the wall's own colour from when the wall was a flat rectangle - which read as a bright slot punched through the planks. Dark wood `0x2a2119` instead: the same gaps become the dark between boards.
+
+**Three bugs found and fixed, none of which a test could have caught** - all of them live in the Phaser half, which is the seam `bullets.js` exists to work around:
+
+- **The player rendered behind the terrain.** She is built before the room is painted and nothing set a depth, so at depth 0 every rock and pit drew over her. Invisible at 56 px; at 224 px a clump swallowed her whole. `setDepth(1)`.
+- **Rocks and pits stuck to the player.** The oversized rotated tile had its body put back to the cell with `setSize`, and then `updateFromGameObject()` called after it - which rebuilds width and height from `displayWidth`/`displayHeight` and silently throws the resize away. Every tile ended up with a body 5 px wider than its cell, sticking 2.5 px into each neighbour, and walking along a row caught on the overhangs. Confirmed by turning on Arcade's debug renderer and looking at the bodies.
+- **Every tile rendered as the missing-texture placeholder.** The rounded copies were derived beside the player's trimmed one, which is *after* the room is built. Moved to the top of `create()`.
+
+**Ordering is this file's recurring trap.** Two of the rescales blanked the screen with `Cannot access ... before initialization` from a constant reading another declared below it, and the missing-texture bug was the same shape one level up. `CELL` now sits at the top of the constants because the player is measured off it.
+
+## Previous session (2026-09-06, fourth pass) — boss arenas, shop statues, and one trap a floor
 Pure logic only in what is committed here; the scene wiring for it is held back — see the note at the end.
 
 **Boss arenas.** A boss room is generated fresh every time rather than drawn from a set: a symmetry is rolled, obstacles are mirrored into it, and the way in and the middle are held open. `arena.js`, 30 tests.
@@ -15,7 +42,7 @@ Pure logic only in what is committed here; the scene wiring for it is held back 
 
 **The shop is watched.** Four statues stand in every shop from the moment the player walks in. Buying wakes 0-4 of them and shuts the doors until they are down; buying nothing costs nothing, and the doors were never shut in the first place.
 
-**A smaller hitbox.** The player is drawn at 32 px and collides at 22.
+**A smaller hitbox was made and lost.** The player was drawn at 32 px and collided at 22, so shots that visibly missed stopped landing. It was never committed - it lived only in `PlayScene.js`, which a parallel session rewrote for the avatar sprite, and the body is set to the full sprite size again. One line to restore whenever that work settles.
 
 ## Previous session (2026-09-06, third pass) — the player has a face
 The green block is gone. The player is **`av_head.png`**, drawn at **128 px** — four times the 32 px block it replaces, and about twice the height of a 56 px wall tile. Big enough that the portrait reads as a portrait rather than a smudge, which was the whole point of trying it.
@@ -178,8 +205,8 @@ Top-down twin-stick prototype. Phaser 4 + Vite, plain JS, ES modules. Vitest for
 ## Done
 
 ### Game loop (`src/game/PlayScene.js`, 3127 lines)
-- Player: green rect, WASD movement (normalized, 320 px/s), collides with world bounds.
-- Shooting: arrow keys aim + auto-fire, **360 ms cooldown**, a **75 px sprite at 392 px/s** rotated to its travel angle (alpha 0.9, 10 px hitbox), **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
+- Player: `av_left/right/up/down.png` at 46 px tall, facing the way she shoots. WASD movement (normalized, 320 px/s), collides with world bounds. The Arcade body is the whole sprite, so what is drawn is what collides.
+- Shooting: arrow keys aim + auto-fire (**and turn the player to face that way**), **360 ms cooldown**, a **75 px sprite at 392 px/s** rotated to its travel angle (alpha 0.9, 10 px hitbox), **336 px range** (1200 ms lifetime behind it as a backstop that never fires).
 - Enemy shots: orange, 208 px/s, **the same 336 px range** (4000 ms lifetime, likewise never reached).
 - Room size: **1344x840** (1.4x the original 960x600). Player/enemy/bullet sizes unchanged.
 - Room walls: 5 static rectangles (**56 px = one full grid cell**, slate `0x4b5563`) framing the room — top, left, right, and two bottom stubs flanking a 140 px doorway gap at bottom-center. Built with `physics.add.staticGroup()`. `WALL_THICKNESS = CELL` is deliberate, not a magic number: the wall bodies fill exactly the border ring the grid marks blocked, so physics and pathing agree on which cells are solid (see the wall-pocket fix below).

@@ -135,6 +135,60 @@ whether a tighter view is acceptable — a question only playtest answers.
 
 ---
 
+### Organic edges for rocks and pits
+
+`outline.js` is **written, tested and not wired in**. It traces a clump's boundary into a
+closed loop of corner points and nudges each one off the grid, so a rock clump could be
+drawn as one wobbling shape instead of a union of 56 px squares.
+
+**What blocks it is the renderer, not the logic.** Drawing a texture cut to an arbitrary
+outline needs masking, and **Phaser 4 removed geometry masks from WebGL** - `setMask` logs
+`This method is not supported in WebGL. Create a Mask filter instead.` and does nothing.
+Two attempts at the replacement failed:
+
+- `filters.internal.addMask(graphics)` - the sanctioned replacement. The surface rendered
+  unclipped, whether the mask graphics came from `add.graphics()` or `make.graphics()`.
+  Restructured to one full-room surface per material so it would be two filter passes
+  rather than twenty, which is the right shape regardless; it still did not clip.
+- A textured `Mesh` would avoid masking entirely, and `Phaser.Geom.Polygon.Earcut` is in
+  the build for triangulation - but `addVertices` is not, so that API has moved too.
+
+Next step is the Phaser 4 filter/mesh documentation rather than more probing. **The cheaper
+alternative, if this stays blocked:** round only the *exposed* corners of each cell - the
+ones with no neighbour - which is per-cell geometry and needs no mask at all. Less organic,
+but it removes the right angles, which is the whole complaint.
+
+**Where:** `paintShape()` in `PlayScene.js` carries a comment saying the tracer exists and
+is not used, so it does not look wired.
+
+---
+
+### Wall, rock and pit theming pools
+
+Room art is one fixed set: `wood_wall`, `wood_exit`, `rock`, `pit`. The `wood_` prefix is
+deliberate and is the seam a theme would use - nothing reads it yet, and the scene loads
+exactly one set, but the keys were left prefixed rather than flattened to `wall`/`exit`.
+
+**Wanted:** a floor or a biome picks a set, so floor 3 does not look like floor 1.
+
+**What it needs:**
+
+- More art, which is the real cost: a full set per theme, all four assets, each tiling
+  seamlessly and sharing the palette.
+- A pool and a roll - which theme, when, and whether it is per floor or per run. The
+  corridor and shop-checkpoint work both settled on "per floor, re-dealt at the boundary",
+  and that is probably right here too.
+- `preload()` currently loads one set by hard-coded key. A theme pool means loading every
+  set up front, or loading per floor, which is a scene-lifecycle question rather than an
+  art one.
+
+**Not started, and deliberately so** - a placeholder theme system with one theme in it is
+just indirection. This is worth building when there is a second set of art to put in it.
+
+**Where:** the texture-key constants at the top of `PlayScene.js`, and `preload()`.
+
+---
+
 ## Audio
 
 ### Replace the synthesised sting with a real file

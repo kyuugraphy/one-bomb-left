@@ -86,14 +86,14 @@ describe('the shipped numbers', () => {
   // room matters, and long enough to outreach the thing shooting back.
   it('reaches further than an enemy has to walk to touch you, but not across a room', () => {
     expect(BULLET_RANGE).toBeGreaterThan(CELL * 3)
-    expect(BULLET_RANGE).toBeLessThan(1344 / 2)
+    expect(BULLET_RANGE).toBeLessThan((CELL * 24) / 2)
   })
 })
 
 // The enemy's shot speed is derived from PLAYER_SPEED in the scene (0.65 x 320 = 208),
 // which is Phaser-side and cannot be imported here. It is passed in explicitly and the
 // real value is confirmed by measuring a shot in the browser.
-const ENEMY_SHOT_SPEED = 208
+const ENEMY_SHOT_SPEED = 320 * 0.65
 
 describe('enemy shots', () => {
   it('reach exactly as far as the player does', () => {
