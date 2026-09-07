@@ -769,7 +769,23 @@ export class PlayScene extends Phaser.Scene {
     // set once here.
     this.sizePlayer()
     this.player.body.setCollideWorldBounds(true)
-    this.cameras.main.startFollow(this.player, true, CAMERA_LERP, CAMERA_LERP)
+    // The `false` is roundPixels, and it used to be true. **Pixel-snapping the camera was
+    // buying nothing and costing smooth motion.** It only pays off when the canvas maps 1:1
+    // to device pixels at an integer zoom; Scale.FIT rescales 1344x840 by whatever
+    // non-integer factor the window happens to need, so the crispness it protects is
+    // resampled away one step later regardless.
+    //
+    // What it cost: a lerped scroll chasing a slowly drifting player changes by a fraction
+    // of a pixel per frame, and rounding turns that into the whole scene jumping a pixel at
+    // irregular intervals. Gap assist is what made it visible - it is the first thing that
+    // moves her perpendicular during ordinary straight-line walking, and it only showed in
+    // big rooms, because a standard room is exactly the viewport and the camera never
+    // scrolls in one at all.
+    //
+    // Nothing here is pixel art to protect anyway: tiles are drawn rotated a rolled few
+    // degrees and oversized, and the avatar is scaled to a held height per facing, so every
+    // one of them is linearly filtered already. Sub-pixel scroll is the consistent choice.
+    this.cameras.main.startFollow(this.player, false, CAMERA_LERP, CAMERA_LERP)
 
     this.bullets = this.add.group()
     this.enemyShots = this.add.group()
