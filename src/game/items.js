@@ -10,6 +10,13 @@
 // down ahead of the system that will use it. Hair Trigger has none on purpose; see
 // PENDING_BONUS_WEIGHT in items.test.js.
 //
+// `rank` is an actives-only 1-4 integer, and it says two things at once: what the item
+// costs in the 6-slot shared inventory that is coming, and how strong it is relative to
+// the other actives. One number for both, so a rank 4 active is the powerful one *and*
+// the one that eats most of the rack. **Nothing reads it yet** - inventory.js and
+// actives.js still know only about three unique slots; items.test.js pins the values so
+// they are right on the day something does read them.
+//
 // `icon` is placeholder art, in the same register as everything else on screen: a
 // coloured geometric shape. **Shape is the tier and colour is the item**, so one glyph
 // says both what kind of thing this is and which one:
@@ -99,6 +106,7 @@ export const ACTIVE_ITEMS = [
     icon: { shape: 'triangle', color: 0xa3e635 },
     effect: 'damage/push back all enemies in radius',
     bonusWeight: 0.5,
+    rank: 3,
     cooldown: 12000
   },
   {
@@ -109,6 +117,7 @@ export const ACTIVE_ITEMS = [
     icon: { shape: 'triangle', color: 0x22d3ee },
     effect: 'heal 1 HP (half-heart)',
     bonusWeight: 0.3,
+    rank: 2,
     cooldown: 30000
   },
   {
@@ -119,6 +128,7 @@ export const ACTIVE_ITEMS = [
     icon: { shape: 'triangle', color: 0x818cf8 },
     effect: 'shrug off every hit for 2.5s',
     bonusWeight: 0.4,
+    rank: 1,
     cooldown: 24000
   },
   {
@@ -129,6 +139,7 @@ export const ACTIVE_ITEMS = [
     icon: { shape: 'triangle', color: 0xf472b6 },
     effect: 'heal 2 HP (one heart)',
     bonusWeight: 0.35,
+    rank: 4,
     cooldown: 45000
   }
 ]

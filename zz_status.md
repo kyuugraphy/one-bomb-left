@@ -1,13 +1,34 @@
 # one-bomb-left — Status
 
-_Last updated: 2026-09-06_
+_Last updated: 2026-09-07_
 
 **Try it:** `npm run dev` → http://localhost:5173 · WASD to move, arrow keys to aim/fire, `1`/`2`/`3` for actives, **`ESC` to pause**.
 
 **Companion file:** `zz_todo.md` holds deferred work — things wanted but not built. This file records what **is**; that one records what is **intended**, so neither has to hedge.
 
-## Latest session (2026-09-06, fifth pass) — the avatar turns, and the world settles at 1:1
-The scene half of this is **not committed** - `PlayScene.js` also carries the held-back wiring from the pass below, and the two cannot be separated. Everything here runs; only the file it lives in is waiting.
+## Latest session (2026-09-07, first pass) — one-cell gaps stop eating runs, and the inventory grows a second shape
+All of this is committed, scene half included. Nothing is held back this time.
+
+**Walking at a one-cell gap no longer stops you dead.** A 46 px body in a 56 px cell has 5 px of slack on each side, and Arcade resolves the leading corner against the rock's corner on the *movement* axis - so a few pixels of misalignment stops the player against a hole she is visibly aimed at, and holding the key does not help, because the same corner is there next frame. It reads as the game ignoring the stick, which is the worst kind of bug: the player is doing it right and the room says no. `gapAssist.js` reads the grid one cell ahead and returns a perpendicular lean; `updateMovement` scales it by `GAP_ASSIST_STRENGTH` - 0.18 of walking pace - and adds it **after** the normalize, so it is a shove on top of full speed rather than a turn that costs forward motion. 31 tests.
+
+**The first cut was wrong in the way only playing it could show.** It leaned whenever one side of the lane ahead was solid and the other open, which sounds narrow and is not: every room sits inside a blocked wall ring, so walking anywhere along a wall matched it, and so did passing any single rock in open floor. It shoved the player around empty rooms. The bias was also a full unit that never tapered, so once it started it kept pushing - past the middle of the gap and out the far side.
+
+**The rule that works is the narrow one: one open cell with solid on both sides of it.** Two rocks with a single block of space between them, a rock beside a wall, or the two jambs of a doorway - so doorways get the assist as well, and they are prime catch spots. Anything two cells wide is left alone, because 66 px of room cannot clip a 46 px body. Anything with an open side is left alone, because the player can simply walk round it. The lean is **proportional and self-cancelling**: it is how far off the gap's centreline she is, so it fades out as she lines up instead of overshooting. `CENTRING_BAND` is 0.06 of a cell - about 3 px, deliberately less than the 5 px of real slack, so anyone far enough out to actually catch a corner gets the whole correction - and `CENTRED_ENOUGH` is 0.015, under a pixel, below which correcting would only mean a permanent sliver of sideways velocity.
+
+**Diagonals get nothing, on purpose.** Two axes of input have no single perpendicular to lean on - the quarter turn of (1, 1) is (1, -1), still diagonal - so a correction would fight the player's own input on both axes instead of sliding her. It is also not the shape of the bug: the catch that strands you is the one you walk straight into and cannot escape by holding the same key.
+
+**`cellAt` was the trap here, and it is the ordering trap above wearing different clothes.** The wiring first passed `cellAt(x, y)`, which floors and clamps. That is correct for every other caller - pathing and spawn checks ask "which tile is this" - but gap assist reads the *fraction* as how far off centre the player is, so a floored position reports everyone as sitting exactly half a cell out and leans at full strength forever. That is the original bug with a new cause. It divides by `CELL` directly now, and the reason is written at the call site so it does not get tidied back to the tidier-looking helper.
+
+**Items carry a `rank`, 1-4, and nothing reads it.** Bulwark 1, Second Wind 2, Panic Button 3, Repair Kit 4 - actives only. One number saying two things: what the item will cost in the shared rack below, and how strong it is relative to the other actives. Laid down ahead of the system that will read it, the same way `bonusWeight` was, and pinned item by item in `items.test.js` so it is correct on the day something does read it rather than discovered wrong then.
+
+**A 6-slot shared rack exists beside the three-tier inventory, and nothing uses it yet.** `createRack`, `addTrinket`, `addActiveToRack`, `swapActiveInRack`, `freeSlotCount` - trinkets and one held active paid for out of the same six slots, an active costing its `rank`. A consumed slot holds the item's own reference, repeated across every slot it paid for, which makes "free the slots this active held" a filter by identity rather than bookkeeping kept somewhere else. Trinkets are unique by id and refuse a duplicate before they check for space, on the same precedent that makes `addActiveToRack` say `active-held` before `no-space`: the more specific reason wins, and sending a player off to make room for something that would be refused again is a lie.
+
+**The rack's ugly case is recorded rather than smoothed over.** Swapping a rank 4 active in needs four free slots, and freeing a rank 1 does not pay for it when trinkets hold the rest. The old active is already gone by then, so the player holds none until they free trinket space. `swapActiveInRack` returns `{ success: false, reason: 'no-space', freedOldActive: true }` and says so out loud - not ideal, but explicit and testable beats a silent half-state.
+
+**The old inventory functions are all marked `@deprecated` and all still behave exactly as they did.** `PlayScene` drives the three-tier shape and knows nothing about a rack. The migration is the next step and the markers are the map for it; until then both shapes are live and only one is wired. `inventory.test.js` is 69 tests, old contract and new side by side.
+
+## Previous session (2026-09-06, fifth pass) — the avatar turns, and the world settles at 1:1
+The scene half of this **has since landed**, in `3d2380d` - a commit whose message says only "statue count for shop", so `git log --oneline` does not show where the avatar work went. Corrected here because this section spent a session claiming it was still waiting.
 
 **She is four drawings now, and faces the way she shoots.** `av_left/right/up/down.png`, picked off the arrow keys. Movement is WASD and does not turn her, so you can back away from something while still facing it. The aim is read **before** the fire-cooldown check - gating the turn on the cooldown would leave her looking the old way for up to 360 ms after you turned. A diagonal resolves to the larger component, and a true diagonal ties to the horizontal, because the side poses read as facing far more strongly than the up one does.
 

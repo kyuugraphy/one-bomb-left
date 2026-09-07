@@ -9,6 +9,7 @@ import {
 } from './bullets.js'
 import { addExp, spendExp } from './currency.js'
 import { computeStats } from './effects.js'
+import { computeGapNudge } from './gapAssist.js'
 import { grantItem } from './grant.js'
 import { countOwned, hasSetBonus, passiveCounts } from './inventory.js'
 import { ITEMS, SET_BONUS, itemsFrom } from './items.js'
@@ -76,6 +77,18 @@ import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 // while nothing above it read it.
 const CELL = 56
 const PLAYER_SPEED = 320
+// How hard gap assist leans at full tilt, as a share of walking pace. See gapAssist.js for
+// what it is solving; this is the half of it that has to be felt rather than reasoned
+// about. It is a ceiling rather than a constant now - the module returns a fraction that
+// falls away as she lines up with the gap, so this is only reached while she is actually
+// off centre and only inside a one-cell gap.
+//
+// It is a share of PLAYER_SPEED rather than of this.stats.moveSpeed, so the lean is the
+// same shove whatever the player is wearing. A corner catches at a fixed offset - it is
+// geometry, not momentum - so the correction that clears it should not shrink because a
+// Heavy Vest slowed her down. The cost is that the assist is a slightly larger fraction of
+// a slow player's movement than a fast one's, which is the right way round if either.
+const GAP_ASSIST_STRENGTH = 0.18
 // **What is drawn is what collides.** The sprite used to be deliberately wider than the
 // body - a 56 px drawing on a 39 px box - on the reasoning below, which is sound and which
 // this now gives up: a body narrower than the art means the art overlaps whatever stops
@@ -1089,12 +1102,42 @@ export class PlayScene extends Phaser.Scene {
   }
 
   updateMovement() {
-    const velocity = new Phaser.Math.Vector2(
+    // The raw -1/0/1 pair, kept unnormalized: gap assist reads it as a direction rather
+    // than a speed, and normalize would turn a diagonal into 0.707s it cannot classify.
+    const input = new Phaser.Math.Vector2(
       (this.wasd.D.isDown ? 1 : 0) - (this.wasd.A.isDown ? 1 : 0),
       (this.wasd.S.isDown ? 1 : 0) - (this.wasd.W.isDown ? 1 : 0)
     )
 
-    velocity.normalize().scale(this.stats.moveSpeed)
+    const velocity = input.clone().normalize().scale(this.stats.moveSpeed)
+
+    // Added after the normalize on purpose. Folded in before it, the lean would be one
+    // component of a vector scaled back to walking pace - so it would steer by turning the
+    // player rather than by sliding her, and cost forward speed to do it. On top, it is
+    // what it says: full speed at the gap, plus a shove towards the middle of it.
+    //
+    // **Fractional cells, not cellAt.** cellAt floors and clamps, which is right for the
+    // pathing and spawn checks that ask "which tile is this" - but computeGapNudge reads
+    // the fraction as how far off the gap's centreline she is, and a floored position
+    // reports everyone as sitting exactly half a cell off centre. That is a constant
+    // full-strength lean, which is the bug this pass exists to fix. Same axis convention
+    // cellAt uses - y is the row, x is the column - just without the rounding.
+    //
+    // Unclamped is safe: gapAssist reads anything off the edge of the grid as wall.
+    const playerRow = this.player.y / CELL
+    const playerCol = this.player.x / CELL
+    // Vector x is the column axis and y the row axis, so the bias crosses over. No guard
+    // for standing still or moving diagonally: computeGapNudge answers both with no bias.
+    const nudge = computeGapNudge({
+      playerRow,
+      playerCol,
+      moveDirRow: input.y,
+      moveDirCol: input.x,
+      blocked: this.blocked
+    })
+
+    velocity.x += nudge.col * GAP_ASSIST_STRENGTH * PLAYER_SPEED
+    velocity.y += nudge.row * GAP_ASSIST_STRENGTH * PLAYER_SPEED
 
     this.player.body.setVelocity(velocity.x, velocity.y)
   }

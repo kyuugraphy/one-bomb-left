@@ -228,6 +228,50 @@ describe('bonusWeight', () => {
   })
 })
 
+// Slot cost in the 6-slot shared inventory and power tier at once, one number for both.
+// **Nothing reads it yet** - inventory.js and actives.js still know only about three
+// unique slots - so these tests are all that keeps the values honest until something does.
+describe('rank', () => {
+  test('carries the ranks that were specified, item by item', () => {
+    const expected = {
+      bulwark: 1,
+      second_wind: 2,
+      panic_button: 3,
+      repair_kit: 4
+    }
+
+    Object.entries(expected).forEach(([id, rank]) => expect(getItem(id).rank, id).toBe(rank))
+  })
+
+  test('every active has one, and it is an integer from 1 to 4', () => {
+    ACTIVE_ITEMS.forEach((item) => {
+      expect(Number.isInteger(item.rank), item.id).toBe(true)
+      expect(item.rank, item.id).toBeGreaterThanOrEqual(1)
+      expect(item.rank, item.id).toBeLessThanOrEqual(4)
+    })
+  })
+
+  // Rank is a slot cost, and only the active rack has slots to spend. If a trinket or a
+  // passive picks one up it means something has started reading the field wrongly.
+  test('nothing but an active carries one', () => {
+    ITEMS.filter((item) => item.slot !== 'active').forEach((item) =>
+      expect(item.rank, item.id).toBeUndefined()
+    )
+  })
+
+  // It is inert on purpose: nothing should have started reading it behind our backs.
+  test('changes no stat, being data for a system that does not exist yet', () => {
+    const base = { maxHp: 6, fireCooldown: 180, moveSpeed: 320, damage: 1, expPerKill: 2 }
+    const withRank = createInventory()
+    const withoutRank = createInventory()
+
+    withRank.actives[0] = { ...getItem('bulwark') }
+    withoutRank.actives[0] = { ...getItem('bulwark'), rank: undefined }
+
+    expect(computeStats(base, withRank)).toEqual(computeStats(base, withoutRank))
+  })
+})
+
 // Placeholder art, but the data still has to hold: an icon nobody can tell apart from
 // another icon is worse than no icon, because it reads as information and is not.
 describe('item icons', () => {
