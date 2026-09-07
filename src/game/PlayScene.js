@@ -16,6 +16,8 @@ import {
   canAfford,
   priceOf,
   purchaseBlockedReason,
+  rollWakeCount,
+  STATUE_COUNT,
   rollShopStock,
   sellableItems,
   shelfLabelFor
@@ -33,6 +35,7 @@ import {
   rollDoors
 } from './doors.js'
 import { BOSS_DOOR, doorPolicyFor } from './floors.js'
+import { arenaBossSpawn, arenaEntry, generateArenaObstacles, rollSymmetry } from './arena.js'
 import { DEBUFF_DROP, rollRoomDrop } from './drops.js'
 import { advanceFloor, recordTwist, roomFor } from './run.js'
 import { HEAL_DROP, rollEnemyDrop } from './drops.js'
@@ -52,10 +55,139 @@ import { edgePoint } from './pings.js'
 import { pickWeighted, weightedPassivePool } from './weights.js'
 import { applySwap, needsSwapPrompt, swapOptions } from './swap.js'
 
+// --- WORLD SCALE ---------------------------------------------------------------------
+// Back to 1:1. A 24x15 room at 56 px a cell is 1344x840, which is exactly the canvas, so
+// the room fills the screen with nothing cropped and nothing to scroll - the arrangement
+// the game was originally tuned around, arrived at again from the other direction.
+//
+// The route here is worth keeping, because each step was ruled out by looking at it: 4x
+// made a room six cells of viewport and turned combat into shooting the whole screen;
+// 1.68x (a 94 px cell, the player's own size) still overflowed the canvas; 0.56x fit the
+// room inside the screen with a wide dead margin around it and shrank the portrait back to
+// an unreadable 31 px smudge. Filling the screen is what fixes the last of those, and at
+// this grid it pins the cell to 56 exactly.
+//
+// So every spatial number below is simply its original value. Anything measured in cells
+// never moved through any of this - room masks, corridor widths, obstacle coverage.
+// --- end world scale -----------------------------------------------------------------
+
+// The grid cell, and the first constant here because the player is measured off it - one
+// block is one avatar. It used to sit down beside the pathing numbers, which was fine
+// while nothing above it read it.
+const CELL = 56
 const PLAYER_SPEED = 320
-const PLAYER_SIZE = 32
+// **What is drawn is what collides.** The sprite used to be deliberately wider than the
+// body - a 56 px drawing on a 39 px box - on the reasoning below, which is sound and which
+// this now gives up: a body narrower than the art means the art overlaps whatever stops
+// her, and a standing figure overlapping a wall she is not touching looks broken in a way
+// that a slightly generous hitbox never did.
+//
+// The old reasoning, kept because it is the cost of this: a hitbox that matches the sprite
+// is the honest choice right up until the player starts losing half-hearts to shots that
+// visibly missed - the corner is the part that gets clipped, and it is the part the eye
+// does not count as "you". Expect her to take hits on her hair and her hem now.
+//
+// This does not reopen the wall-pocket exploit. That was fixed by making the wall bodies
+// fill the whole 56 px blocked ring (WALL_THICKNESS = CELL), so a smaller player simply
+// stands nearer the wall face - still in an open cell, with nothing to squeeze into.
+// One drawing per facing. She turns to whichever way she is shooting, which is the arrow
+// keys - movement is WASD and does not turn her, so you can back away from something while
+// still facing it.
+const PLAYER_FACINGS = ['right', 'left', 'up', 'down']
+// Where she looks before anything has been shot. Right, because av_right.png is the pose
+// the character was drawn in and the one every earlier build showed.
+const PLAYER_FACING_DEFAULT = 'right'
+// The loaded key and the trimmed copy she is actually drawn with, per facing - see
+// trimTransparent(). Built rather than written out so a facing cannot be added in one
+// place and forgotten in the other.
+const PLAYER_TEXTURE = Object.fromEntries(
+  PLAYER_FACINGS.map((facing) => [facing, `av_${facing}`])
+)
+const PLAYER_TEXTURE_CUT = Object.fromEntries(
+  PLAYER_FACINGS.map((facing) => [facing, `av_${facing}_trimmed`])
+)
+// Drawn at 94 px - three times the 32 px block it replaces. A face has to be legible to
+// read as a face, and 32 px of a 1254 px portrait is a smudge. Unlike every other sprite
+// in the game this one is very nearly its own hitbox: 94 drawn against 90 collided with,
+// so what you see is what you bump into.
+// **Height, and it is the long side.** av_full.png is a standing figure, about 4 wide to 7
+// tall once the transparent margin is trimmed off, so height is what decides whether she
+// fits through anything. Sized off it at 46 - a little over 4/5 of a cell - which leaves
+// 10 px of clearance in a one-cell gap and makes her about 26 px across.
+//
+// She was one full block wide before, which drew her larger than the block she stood in
+// and overlapped every rock and wall she walked up to. Smaller is the point of this.
+const PLAYER_SPRITE_HEIGHT = 46
+// The player's nominal size, used for the muzzle offset and the reveal ring.
+const PLAYER_SIZE = PLAYER_SPRITE_HEIGHT
+// How opaque a pixel has to be to count as part of the art when trimming. Not zero: the
+// export carries a faint halo of nearly-transparent pixels that reaches almost to the
+// canvas edge, and trimming on "any alpha at all" keeps 1157 px of a 1254 px image. At 16
+// the figure measures 707x1238, which is what is actually drawn.
+const SPRITE_ALPHA_THRESHOLD = 16
 const BULLET_RADIUS = 5
 const BULLET_TEXTURE = 'bullet'
+
+// Room art. The flat colours these replace are gone with them - there was never a fallback
+// path that would have used them, so keeping them would have left three constants
+// describing what the room used to look like.
+//
+// The `wood_` prefix was the first theme's, and the seam a theme pool would have used. The
+// tight re-cuts do not carry it, so wall/rock/pit are now plain names and only the exit is
+// still prefixed - the seam is half gone rather than deliberately dropped. See zz_todo.md.
+const WALL_TEXTURE = 'wall_tight'
+// The wall art carries an alpha channel and a ragged silhouette: the planks do not fill
+// their tile, and the edges are broken rather than square. Tiled, that leaves the backing
+// slab showing through in gaps along every seam.
+//
+// The slab cannot be removed - without it the room shows through the holes - so the fix is
+// to make it stop reading as a hole. Slate `0x4b5563` was the wall's own colour back when
+// the wall *was* a flat rectangle, and against wood it reads as a bright slot punched
+// through the planks. A dark wood shadow instead: the same gaps become the dark between
+// boards, which is what the eye expects to find there, and the wall reads as continuous.
+const WALL_BACKING_COLOR = 0x2a2119
+// How many grid cells one repeat of a room texture covers - walls, rocks and pits alike.
+//
+// **One**, so a whole PNG lands on exactly one block. This was 4 for the first art set, on
+// the reasoning that repeating per cell made an eight-cell rock clump read as eight
+// identical stamps rather than one mass of rock - true of a texture that was cut to be
+// zoomed into, and a quarter of the image was all a 56 px block ever showed.
+//
+// The `_tight` re-cuts are drawn as a block rather than as a surface to sample, so the
+// original argument no longer applies to them: at 4 a block showed a quarter of the art
+// and the drawing came out larger than the cell it sat in.
+const TILE_CELLS = 1
+// A few degrees of turn on each rock and pit cell, rolled per cell, so a clump reads as a
+// mass of rock rather than the same stamp repeated in a grid - the objection that used to
+// be answered by sampling one texture across four cells.
+//
+// Rotating a square inside its own cell would swing its corners in and leave the cell's
+// corners bare, so the tile is drawn oversized by exactly enough to cover them:
+// cos(a) + sin(a) is the width a rotated unit square needs. At 5 degrees that is 1.09, so
+// a tile spills about 2 px past its cell - into a neighbouring rock, or onto floor at the
+// edge of a clump, which is what stops the grid reading as a grid.
+//
+// Static bodies do not rotate, so nothing here touches what a shot or a foot collides
+// with. It is paint.
+const TILE_TURN_MAX = 5
+const TILE_TURN_COVER =
+  Math.cos(Phaser.Math.DegToRad(TILE_TURN_MAX)) + Math.sin(Phaser.Math.DegToRad(TILE_TURN_MAX))
+
+const EXIT_TEXTURE = 'wood_exit'
+const ROCK_TEXTURE = 'rock_tight'
+// How much of a tile's width its corner radius is. Two per cent of 1254 px of source is
+// about 25 px, which lands as a bit over a pixel once a cell is 56 - just enough to take
+// the point off a square corner without the tile reading as a pebble.
+const TILE_CORNER_FRACTION = 0.02
+const PIT_TEXTURE = 'pit_tight'
+// Every room texture gets the same treatment, so the rounding is a property of the room
+// rather than of rock in particular. The keys the room is actually drawn with are these
+// rounded copies - see roundCorners().
+const ROUNDED = {
+  [WALL_TEXTURE]: 'wall_tight_round',
+  [ROCK_TEXTURE]: 'rock_tight_round',
+  [PIT_TEXTURE]: 'pit_tight_round'
+}
 // The sprite is drawn far larger than the shot it stands for. Its hitbox stays the 10 px
 // box the old circle had - see fire() - so this size is purely visual.
 const BULLET_SPRITE_SIZE = 75
@@ -80,7 +212,6 @@ const ENEMY_SHOT_COLOR = 0xfb923c
 const ENEMY_FIRE_COOLDOWN = 1400
 const ENEMY_MUZZLE_OFFSET = ENEMY_SIZE / 2 + ENEMY_SHOT_RADIUS
 const HIT_COOLDOWN = 600
-const WALL_COLOR = 0x4b5563
 const DOORWAY_WIDTH = 140
 const DOORWAY_MARGIN = 40
 const ENTRY_LINE_OFFSET = 140
@@ -104,15 +235,17 @@ const BAR_TRACK_COLOR = 0x1f2430
 const BAR_EDGE_COLOR = 0x565f72
 const DETOUR_CLEARANCE = 8
 const PATH_LOOKAHEAD = 6
-const CELL = 56
 // The wall bodies fill the grid's whole blocked border ring rather than sitting a thin
 // strip inside it. Physics and pathing then agree on exactly which cells are solid: with
 // a 24 px wall the leftover 32 px of the border cell was a corridor the 32 px player fit
 // into and the 36 px enemy did not, so a rock in the next cell in made an invincibility
 // pocket - unreachable on foot and, often enough, out of the enemy's shot line too.
 const WALL_THICKNESS = CELL
-const ROCK_COLOR = 0x6b7280
-const PIT_COLOR = 0x05060a
+// The rectangle room's dimensions, in cells - the same 24x15 it always was. It was implied
+// by the canvas size before, back when one cell was 56 px and 24x15 of them came to
+// exactly 1344x840.
+const BASE_ROOM_COLS = 24
+const BASE_ROOM_ROWS = 15
 const PICKUP_SIZE = 24
 const PICKUP_CURSED_COLOR = 0xa855f7
 const PICKUP_TREASURE_COLOR = 0xfbbf24
@@ -242,6 +375,12 @@ const AMBUSH_PANEL_COLOR = 0x0f172a
 const AMBUSH_PANEL_ALPHA = 0.3
 const AMBUSH_PANEL_PAD = 24
 
+// Statues: the shop's guardians before they are guardians. Stone rather than enemy red,
+// because an enemy that is not going to move yet must not read as one that is - and
+// deliberately not scenery either, so the player can see what buying will wake.
+const STATUE_COLOR = 0x7c7f8a
+const STATUE_ALPHA = 0.85
+
 const CORRIDOR_EXIT_COLOR = 0xcbd5e1
 const CORRIDOR_EXIT_ALPHA = 0.22
 const CORRIDOR_EXIT_STROKE = 3
@@ -351,6 +490,35 @@ export class PlayScene extends Phaser.Scene {
   // The only loaded asset in the game - everything else is drawn with shape primitives.
   preload() {
     this.load.image(BULLET_TEXTURE, 'sprites/bullet.png')
+    PLAYER_FACINGS.forEach((facing) =>
+      this.load.image(PLAYER_TEXTURE[facing], `sprites/av_${facing}.png`))
+    this.load.image(WALL_TEXTURE, 'sprites/wall_tight.png')
+    this.load.image(EXIT_TEXTURE, 'sprites/wood_exit.png')
+    this.load.image(ROCK_TEXTURE, 'sprites/rock_tight.png')
+    this.load.image(PIT_TEXTURE, 'sprites/pit_tight.png')
+  }
+
+  // A world-anchored tiled surface. **The anchoring is the point**: a tileSprite starts
+  // its texture at its own top-left by default, so every piece would begin the pattern
+  // again - four slabs around a rectangular room, one per cell in a shaped one, one per
+  // cell of a rock clump - each showing the same corner of the same tile. Offsetting by
+  // world position makes them all windows onto one continuous surface, so a clump of rock
+  // reads as a mass and a wall reads as a wall rather than as a row of stamps.
+  tiledSurface(x, y, width, height, texture) {
+    const tile = this.add.tileSprite(x, y, width, height, texture)
+    const scale = this.tileScaleFor(texture) * TILE_CELLS
+
+    tile.setTileScale(scale)
+    tile.setTilePosition((x - width / 2) / scale, (y - height / 2) / scale)
+
+    return tile
+  }
+
+  // How far a source image has to shrink to draw one grid cell. The art is authored large -
+  // 1254 px square, the same convention the bullet uses - and the game is a 56 px grid, so
+  // everything that fills a cell is scaled by this rather than by a number typed in.
+  tileScaleFor(texture) {
+    return CELL / this.textures.get(texture).getSourceImage().width
   }
 
   // A restart hands the next room the plan the chosen door resolved to, plus the state
@@ -366,6 +534,17 @@ export class PlayScene extends Phaser.Scene {
     // entry in ROOM_SHAPES to find. Rolled once here, in init, so it is settled before
     // create() reads it and stays the same room for as long as the player is in it.
     this.shape = this.shapeFor(room.shapeId)
+    // A boss arena is generated rather than looked up, so its symmetry is rolled here in
+    // init - settled before create() reads it, the same way a corridor's mask is. The last
+    // one is remembered on the run so two arenas running do not come out the same shape.
+    this.symmetry =
+      room.roomType === 'boss'
+        ? rollSymmetry(this.gameState.lastArenaSymmetry, Math.random)
+        : null
+
+    if (this.symmetry) {
+      this.gameState.lastArenaSymmetry = this.symmetry
+    }
     this.gameState = room.gameState
     this.startHealth = room.health
     this.twisted = room.twisted
@@ -404,13 +583,124 @@ export class PlayScene extends Phaser.Scene {
     return shapeId === 'corridor' ? generateCorridorRoom(Math.random) : ROOM_SHAPES[shapeId]
   }
 
+  // Takes the point off a texture's corners, once, and hands back the key of the rounded
+  // copy. The rounding is cut out of the alpha channel rather than drawn on, so whatever is
+  // behind the tile shows through the corner instead of a colour that has to be guessed.
+  //
+  // The tile repeats once per cell, so this rounds every stamp rather than the mass as a
+  // whole: inside a rock clump the neighbouring corners round away from each other and
+  // leave a small dark pinch at the junction, which is the join between two rocks and reads
+  // as one. That only works while the radius is small - this is not a knob to turn up far.
+  //
+  // The wall is the one to watch. It is a long slab rather than a grid of cells, so its
+  // repeats round against each other along its length and put a pinch every 56 px into a
+  // surface that is meant to read as continuous. At two per cent that is about a pixel and
+  // it passes for a join between boards; turned up it will look like the gaps that the
+  // backing colour was darkened to hide.
+  roundCorners(sourceKey, roundedKey, fraction) {
+    if (this.textures.exists(roundedKey)) {
+      return roundedKey
+    }
+
+    const source = this.textures.get(sourceKey).getSourceImage()
+    const canvas = this.textures.createCanvas(roundedKey, source.width, source.height)
+    const { context } = canvas
+
+    context.drawImage(source, 0, 0)
+    context.globalCompositeOperation = 'destination-in'
+    context.beginPath()
+    context.roundRect(0, 0, source.width, source.height, source.width * fraction)
+    context.fill()
+    context.globalCompositeOperation = 'source-over'
+    canvas.refresh()
+
+    return roundedKey
+  }
+
+  // Trims a texture to the part of it that is actually drawn, once, and hands back the key
+  // of the trimmed copy.
+  //
+  // This used to key out black as well, because the first avatar export was RGB with the
+  // head sitting on an opaque black field. **The art carries a real alpha channel now, and
+  // keying black would be actively destructive** - av_full.png is 13.6% near-black opaque
+  // pixels, which is her hair and her dress, and cutting on colour would punch holes
+  // straight through the character. Alpha is the only thing consulted here.
+  //
+  // The trim is what matters for how the game feels. The figure sits in the middle of a
+  // 1254 px square with a wide transparent margin; without trimming, a 56 px sprite is
+  // maybe 34 px of character inside 22 px of nothing, and the player stops a visible gap
+  // short of every wall she is flush against. Trimming makes the drawn size mean the
+  // character.
+  //
+  // One pass over the pixels at load, guarded on the key because create() runs per room.
+  trimTransparent(sourceKey, trimmedKey) {
+    if (this.textures.exists(trimmedKey)) {
+      return trimmedKey
+    }
+
+    const source = this.textures.get(sourceKey).getSourceImage()
+    const scratch = document.createElement('canvas')
+
+    scratch.width = source.width
+    scratch.height = source.height
+
+    const context = scratch.getContext('2d')
+
+    context.drawImage(source, 0, 0)
+
+    const { data } = context.getImageData(0, 0, source.width, source.height)
+
+    let minX = source.width
+    let minY = source.height
+    let maxX = -1
+    let maxY = -1
+
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < SPRITE_ALPHA_THRESHOLD) {
+        continue
+      }
+
+      const pixel = (i - 3) / 4
+      const x = pixel % source.width
+      const y = (pixel - x) / source.width
+
+      if (x < minX) { minX = x }
+      if (x > maxX) { maxX = x }
+      if (y < minY) { minY = y }
+      if (y > maxY) { maxY = y }
+    }
+
+    // Nothing solid enough to measure means there is no box to trim to - keep the image
+    // whole rather than building a zero-sized texture, and let it be obvious on screen.
+    const width = maxX < 0 ? source.width : maxX - minX + 1
+    const height = maxY < 0 ? source.height : maxY - minY + 1
+    const offsetX = maxX < 0 ? 0 : minX
+    const offsetY = maxY < 0 ? 0 : minY
+
+    const canvas = this.textures.createCanvas(trimmedKey, width, height)
+
+    canvas.context.drawImage(scratch, -offsetX, -offsetY)
+    canvas.refresh()
+
+    return trimmedKey
+  }
   create() {
+    // Before anything is painted. The room's walls and clutter are built further down this
+    // method and read these keys, so deriving them beside the player - which is where the
+    // player's own trimmed texture is made - was late enough to hand every tile Phaser's
+    // missing-texture placeholder.
+    Object.entries(ROUNDED).forEach(([texture, rounded]) =>
+      this.roundCorners(texture, rounded, TILE_CORNER_FRACTION))
+
     // A shaped room is measured by its mask rather than by the canvas, so the world can
     // be larger than what is on screen. For a rectangle the two are the same size and
     // everything below - world bounds, camera bounds, the follow - is a no-op.
+    // A rectangle room used to be exactly the canvas, which is why this fell back to the
+    // viewport. At CELL 224 the canvas is under six cells across - not a room, a corridor.
+    // It is measured in cells now like every other room, and scrolls like the shaped ones.
     const { width, height } = this.shape
       ? roomSize(this.shape, CELL)
-      : { width: this.scale.width, height: this.scale.height }
+      : { width: BASE_ROOM_COLS * CELL, height: BASE_ROOM_ROWS * CELL }
 
     this.physics.world.setBounds(0, 0, width, height)
     this.cameras.main.setBounds(...this.cameraBoundsFor(width, height))
@@ -422,6 +712,13 @@ export class PlayScene extends Phaser.Scene {
     this.gameOver = false
 
     this.doors = []
+    // What openDoors rolled, kept so a shop can put the *same* doors back after its
+    // guardians are down. Re-rolling would deal a different choice than the one the player
+    // was looking at before they bought - and worse, assignTwistDispositions advances the
+    // floor's shop and puzzle counters, so a second roll in one room would drift the
+    // floor's trap ordinal by a door.
+    this.doorPlan = null
+    this.statues = []
     this.corridorExit = null
     // Reset for the same reason corridorExit is: Phaser reuses the scene instance across
     // restart, so a pad left over from the last room would have the next one reporting
@@ -433,12 +730,31 @@ export class PlayScene extends Phaser.Scene {
     this.buildObstacles(width, height)
     this.cacheWalkBlockers()
 
-    const start = this.shape
-      ? this.centreOf(this.entryCell)
-      : new Phaser.Math.Vector2(width / 2, height - DOORWAY_MARGIN)
+    // An arena's way in is chosen by its symmetry rather than fixed at the bottom, so that
+    // the doorway sits on the axis instead of being the one asymmetric thing in the room.
+    const start = this.symmetry
+      ? this.arenaStart()
+      : this.shape
+        ? this.centreOf(this.entryCell)
+        : new Phaser.Math.Vector2(width / 2, height - DOORWAY_MARGIN)
 
-    this.player = this.add.rectangle(start.x, start.y, PLAYER_SIZE, PLAYER_SIZE, 0x4ade80)
+    PLAYER_FACINGS.forEach((facing) =>
+      this.trimTransparent(PLAYER_TEXTURE[facing], PLAYER_TEXTURE_CUT[facing]))
+
+    this.facing = PLAYER_FACING_DEFAULT
+    this.player = this.add.sprite(start.x, start.y, PLAYER_TEXTURE_CUT[this.facing])
+    this.sizePlayer()
+    // The player is built before the room is painted, and nothing here sets a depth, so at
+    // depth 0 she drew underneath every rock and pit laid down after her. It never showed
+    // while a rock was 56 px and she was a 32 px block in a sparse room; at 224 px a single
+    // clump swallows her whole. One step up is enough - enemies, pickups and shots are all
+    // created after the terrain and already sit above it, and the HUD is up at HUD_DEPTH.
+    this.player.setDepth(1)
     this.physics.add.existing(this.player)
+    // The body is sized in sizePlayer(), which runs again on every turn - the four poses
+    // do not trim to the same box, so the body has to follow the drawing rather than be
+    // set once here.
+    this.sizePlayer()
     this.player.body.setCollideWorldBounds(true)
     this.cameras.main.startFollow(this.player, true, CAMERA_LERP, CAMERA_LERP)
 
@@ -572,6 +888,19 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    // A boss arena is generated whole rather than laid over a rectangle: its clutter is
+    // mirrored into the symmetry the room was built on, and the doorway and the middle are
+    // held open before anything is placed. See arena.js for why it does not go through
+    // generateObstacles.
+    if (this.symmetry) {
+      const arena = generateArenaObstacles(this.symmetry, Math.random)
+
+      this.blocked = arena.blocked
+      this.coverage = arena.coverage
+      arena.shapes.forEach(({ cells, asRock }) => this.paintShape(cells, asRock))
+      return
+    }
+
     // A corridor lays its own clutter: it is three cells wide, so the shape-growing
     // generator would span it end to end with a single rock, and the near-wall seeding
     // bias means nothing when the whole width is the wall band. Uniform single cells at a
@@ -634,25 +963,57 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
+  // One cell-sized window onto the same world-anchored surface the walls use. A rock clump
+  // runs to 8 adjacent cells and a pit to 12, so sharing one continuous surface means a
+  // clump reads as a mass cut out of rock rather than as that many stamps side by side.
+  //
+  // The edges are still square, and squares on a grid is what they look like. An outline
+  // tracer that would round them off is written and tested in outline.js, and is **not
+  // wired in**: drawing a clump as one surface cut to a wobbling outline needs masking, and
+  // Phaser 4 removed geometry masks from the WebGL renderer - setMask warns and does
+  // nothing. Its filter replacement did not clip in the shape this needs. See zz_todo.md.
   paintShape(shape, asRock) {
     const group = asRock ? this.rocks : this.pits
-    const color = asRock ? ROCK_COLOR : PIT_COLOR
+    const texture = ROUNDED[asRock ? ROCK_TEXTURE : PIT_TEXTURE]
 
     shape.forEach(([row, col]) => {
-      const tile = this.add.rectangle(
+      const tile = this.tiledSurface(
         col * CELL + CELL / 2,
         row * CELL + CELL / 2,
-        CELL,
-        CELL,
-        color
+        CELL * TILE_TURN_COVER,
+        CELL * TILE_TURN_COVER,
+        texture
       )
+
+      tile.setAngle(Phaser.Math.FloatBetween(-TILE_TURN_MAX, TILE_TURN_MAX))
+
       this.physics.add.existing(tile, true)
+      // The body is built from the oversized tile, so it has to be put back to the cell it
+      // stands for - the grid is what everything else in the room agrees on. setSize on a
+      // static body centres it on the game object, which is already the cell centre, so
+      // this is the whole job.
+      //
+      // **Do not follow this with updateFromGameObject().** It rebuilds width and height
+      // from displayWidth/displayHeight - the oversized ones - and silently throws the
+      // resize away. That left every rock and pit with a body 5 px wider than its cell,
+      // sticking 2.5 px into each neighbour, and a player walking along a row of them
+      // caught on the overhangs and stopped.
+      tile.body.setSize(CELL, CELL)
       group.add(tile)
     })
   }
 
+  // A tileSprite rather than an image, because a rectangular room's walls are five long
+  // slabs - the top one is the full 1344 px width - and an image would stretch one tile
+  // across the whole span. The tile scale makes the texture repeat every CELL, so a wall
+  // reads as 24 tiles rather than one smeared one, and matches the per-cell walls a shaped
+  // room builds.
   addWall(x, y, width, height) {
-    const wall = this.add.rectangle(x, y, width, height, WALL_COLOR)
+    // Added first, so it sits under the planks rather than over them.
+    this.add.rectangle(x, y, width, height, WALL_BACKING_COLOR)
+
+    const wall = this.tiledSurface(x, y, width, height, ROUNDED[WALL_TEXTURE])
+
     this.physics.add.existing(wall, true)
     this.walls.add(wall)
     return wall
@@ -908,6 +1269,40 @@ export class PlayScene extends Phaser.Scene {
     ]
   }
 
+  // Where the player stands on arriving in an arena. The entry cell for a single-cell
+  // doorway, and the seam between the pair when the axis falls between two columns - 24 is
+  // even, so left/right mirroring and the half turn both put the way in on a boundary
+  // rather than on a cell.
+  arenaStart() {
+    const { reserved } = arenaEntry(this.symmetry)
+    const cells = reserved.filter(([row]) => row === reserved[0][0])
+    const cols = cells.map(([, col]) => col)
+    const left = Math.min(...cols)
+    const right = Math.max(...cols)
+
+    return new Phaser.Math.Vector2(
+      ((left + right) / 2) * CELL + CELL / 2,
+      reserved[0][0] * CELL + CELL / 2
+    )
+  }
+
+  // The middle of the boss's reserved block, not the anchor cell - the arena's true centre
+  // falls between two columns, so standing on the anchor would put the boss half a cell off
+  // centre in a room whose whole point is being symmetric.
+  //
+  // Nothing spawns here yet: the boss room is an empty stub, and this is the point a real
+  // boss will be placed at when there is one.
+  arenaBossPoint() {
+    const { reserved } = arenaBossSpawn()
+    const rows = reserved.map(([row]) => row)
+    const cols = reserved.map(([, col]) => col)
+
+    return new Phaser.Math.Vector2(
+      ((Math.min(...cols) + Math.max(...cols)) / 2) * CELL + CELL / 2,
+      ((Math.min(...rows) + Math.max(...rows)) / 2) * CELL + CELL / 2
+    )
+  }
+
   centreOf(cell) {
     const { x, y } = cellCentre(cell, CELL)
 
@@ -1069,10 +1464,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   updateFiring(time) {
-    if (time < this.nextFireAt) {
-      return
-    }
-
+    // Read before the cooldown check, not after. Facing is about where she is aiming, not
+    // about when a shot happens to leave - gating it on the cooldown would leave her
+    // looking the old way for up to 360 ms after you turned.
     const aim = new Phaser.Math.Vector2(
       (this.cursors.right.isDown ? 1 : 0) - (this.cursors.left.isDown ? 1 : 0),
       (this.cursors.down.isDown ? 1 : 0) - (this.cursors.up.isDown ? 1 : 0)
@@ -1082,12 +1476,52 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    this.faceAim(aim)
+
+    if (time < this.nextFireAt) {
+      return
+    }
+
     this.fire(aim.normalize())
     this.nextFireAt = time + this.stats.fireCooldown
   }
 
-  spawnEnemy() {
-    const spawn = this.pickSpawnPoint()
+  // There are four drawings and eight directions the arrows can make, so a diagonal has to
+  // resolve to one of them. The larger component wins, and a true diagonal - both keys,
+  // equal parts - ties to the horizontal, because the left and right poses read as facing
+  // far more strongly than the up one does.
+  faceAim(aim) {
+    const facing = Math.abs(aim.x) >= Math.abs(aim.y)
+      ? (aim.x < 0 ? 'left' : 'right')
+      : (aim.y < 0 ? 'up' : 'down')
+
+    if (facing === this.facing) {
+      return
+    }
+
+    this.facing = facing
+    this.player.setTexture(PLAYER_TEXTURE_CUT[facing])
+    this.sizePlayer()
+  }
+
+  // Scale and body, together, because they have to agree. The four poses do not trim to the
+  // same box - a figure with an arm out is wider than one square on - so both the scale and
+  // the body have to be recomputed from whatever texture is now on her, or she would change
+  // size as she turned and her hitbox would drift off the drawing.
+  //
+  // Height is what is held constant, since it is the long side and the one that decides
+  // what she fits through.
+  sizePlayer() {
+    this.player.setScale(PLAYER_SPRITE_HEIGHT / this.player.height)
+
+    // Called once before the body exists, to get the scale on before physics reads it.
+    if (this.player.body) {
+      this.player.body.setSize(this.player.width, this.player.height, true)
+    }
+  }
+
+  spawnEnemy(at = null) {
+    const spawn = at ?? this.pickSpawnPoint()
     const enemy = this.add.rectangle(
       spawn.x,
       spawn.y,
@@ -1459,16 +1893,52 @@ export class PlayScene extends Phaser.Scene {
     )
 
     this.shopSpent = false
+    this.raiseStatues(STATUE_COUNT)
 
-    // A guarded shop is what the door's tier meant rather than a coin flip: an easy shop
-    // is quiet, a hard one is defended, and the glow said so before you walked in. Saying
-    // it out loud too means the toll is a decision rather than an ambush.
-    this.toast(
-      this.roomPlan.enemyCount > 0
-        ? 'SHOP - browse freely; buy one thing and the guards wake up'
-        : 'SHOP - browse freely; you may buy one thing',
-      this.roomPlan.enemyCount > 0 ? '#fb923c' : '#38bdf8'
-    )
+    this.toast('SHOP - browse freely, leave freely; buying wakes the statues', '#38bdf8')
+  }
+
+  // The guardians before they are guardians. Stone-coloured blocks standing where the
+  // enemies will stand, with no body and no behaviour - they cannot be hit, cannot hit
+  // back, and do not move. **They are visible from the moment the player walks in**, so
+  // the cost of buying is on the table before the decision rather than after it.
+  raiseStatues(count) {
+    for (let i = 0; i < count; i++) {
+      const spot = this.pickSpawnPoint()
+      const statue = this.add.rectangle(spot.x, spot.y, ENEMY_SIZE, ENEMY_SIZE, STATUE_COLOR)
+
+      statue.setAlpha(STATUE_ALPHA)
+      this.statues.push(statue)
+    }
+  }
+
+  // Buying wakes some of them. **Which ones is a shuffle, and how many includes none** -
+  // so a purchase is a gamble against four visible statues rather than a fixed toll.
+  //
+  // A woken statue is replaced by an enemy standing exactly where it stood, so the fight
+  // starts from the arrangement the player has been looking at rather than from a fresh roll
+  // of spawn points. The ones that stay asleep stay standing, as a reminder of what the
+  // next purchase might cost.
+  wakeStatues(count) {
+    const order = [...this.statues]
+
+    // Fisher-Yates: which statues wake has to be a fair draw, or the same corner of the room
+    // comes alive every time and the other two are scenery.
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[order[i], order[j]] = [order[j], order[i]]
+    }
+
+    const waking = order.slice(0, count)
+
+    waking.forEach((statue) => {
+      this.spawnEnemy({ x: statue.x, y: statue.y })
+      statue.destroy()
+    })
+
+    this.statues = this.statues.filter((statue) => !waking.includes(statue))
+
+    return waking.length
   }
 
   // One purchase per visit. The rest of the shelf goes the moment the first thing is
@@ -1486,15 +1956,26 @@ export class PlayScene extends Phaser.Scene {
       pickup.destroy()
     })
 
-    if (this.roomPlan.enemyCount === 0) {
+    const woken = this.wakeStatues(rollWakeCount(Math.random))
+
+    // **Nothing woke, so nothing changes.** The doors are left open and the player walks out
+    // with what they bought. Closing them for a frame and reopening them on the next would
+    // be a flicker that said something happened when it did not.
+    if (woken === 0) {
+      this.toast('you take it - and nothing stirs', '#86efac')
       return
     }
 
-    for (let i = 0; i < this.roomPlan.enemyCount; i++) {
-      this.spawnEnemy()
-    }
+    // The way out shuts behind the purchase. The doors were open the whole visit - a player
+    // who buys nothing walks out freely - so this is the moment the shop stops being safe,
+    // and it has to take the doors with it or the player simply leaves mid-wake.
+    this.doors.forEach((door) => this.closeDoor(door))
+    this.doors = []
 
-    this.toast('the shop guards wake up - clear them to leave', '#fb923c')
+    this.toast(
+      `${woken} statue${woken === 1 ? '' : 's'} wake${woken === 1 ? 's' : ''} - clear them to leave`,
+      '#fb923c'
+    )
   }
 
   // Only the unique tiers can be sold out from under the player. Passives stack, so a
@@ -1682,6 +2163,15 @@ export class PlayScene extends Phaser.Scene {
       return
     }
 
+    // A shop that has been bought from puts back the doors it already rolled rather than
+    // rolling new ones: the player picked their next room before shopping, and a fresh roll
+    // would both take that away and advance the floor's shop and puzzle counters a second
+    // time, drifting its trap ordinal.
+    if (this.doorPlan) {
+      this.reopenDoors()
+      return
+    }
+
     this.payOutRoom()
 
     if (this.roomType === 'corridor') {
@@ -1712,15 +2202,10 @@ export class PlayScene extends Phaser.Scene {
   openFloorExit() {
     const spot = this.freeSpotNear(this.player.x, this.player.y)
 
-    this.floorExit = this.add.rectangle(
-      spot.x,
-      spot.y,
+    this.floorExit = this.add.image(spot.x, spot.y, EXIT_TEXTURE).setDisplaySize(
       EXIT_SIZE,
-      EXIT_SIZE,
-      CORRIDOR_EXIT_COLOR,
-      CORRIDOR_EXIT_ALPHA
+      EXIT_SIZE
     )
-    this.floorExit.setStrokeStyle(CORRIDOR_EXIT_STROKE, CORRIDOR_EXIT_COLOR)
     this.physics.add.existing(this.floorExit)
     this.floorExit.body.setAllowGravity(false)
     this.floorExit.body.setImmovable(true)
@@ -1821,31 +2306,20 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
-  // A shop holds its exit shut until the visit is over, so a guarded one cannot be walked
-  // out of before its guards have been dealt with. The escape hatch is that there is
-  // nothing here to buy - a player with no purchase to make has no way to finish the
-  // visit, and EXP only comes from kills, so without this they would be sealed in.
+  // **A shop never holds its exit shut.** The doors are open from the moment the player
+  // walks in, and buying nothing is a real way to leave - browsing costs nothing and
+  // declining costs nothing either.
   //
-  // **"Nothing to buy" is not the same as "nothing affordable"**, which is what this asked
-  // before and what sealed a player in anyway: at full HP, holding exactly the price of an
-  // HP Refill and not a point more, the refill was affordable and unbuyable at once, so the
-  // doors stayed shut on a shelf with nothing on it for them. A shelf item only counts as a
-  // reason to stay if the player could both pay for it and complete it.
+  // It used to hold the exit until the visit was "over", with an escape hatch for a shelf
+  // with nothing buyable on it. That hatch was a softlock waiting to happen and had already
+  // been one twice: affordable is not the same as buyable, and a bomb refill was not the
+  // same as something worth buying. Opening the doors outright deletes the whole class of
+  // problem rather than patching its next instance.
+  //
+  // What closes them is buying, and only until the statues that wakes are down - see
+  // closeShop.
   shopIsDone() {
-    if (this.roomType !== 'shop' || this.shopSpent) {
-      return true
-    }
-
-    const context = this.purchaseContext()
-
-    return !this.pickups
-      .getChildren()
-      .some(
-        (pickup) =>
-          pickup.spec.kind === 'shop' &&
-          canAfford(this.gameState, pickup.spec.price) &&
-          !purchaseBlockedReason(pickup.spec.entry, context)
-      )
+    return true
   }
 
   // 2-3 doors along the top wall, each advertising a reward type by colour and a
@@ -1864,6 +2338,9 @@ export class PlayScene extends Phaser.Scene {
       this.gameState,
       policy
     )
+    // Kept so a shop can rebuild exactly these after its guardians fall.
+    this.doorPlan = rolled
+
     const spots = this.pickDoorSpots(rolled.length)
 
     // The spots are the truth: a shaped room's exit tips seat what doorCapacity() said
@@ -1877,6 +2354,18 @@ export class PlayScene extends Phaser.Scene {
       this.doors.length === 1 ? 'one way on' : `${this.doors.length} doors, pick one`
 
     this.toast(`room clear - ${choice}`, '#86efac')
+  }
+
+  // The same doors again, from the roll that already happened. No new roll, no second pass
+  // over the floor's counters.
+  reopenDoors() {
+    const spots = this.pickDoorSpots(this.doorPlan.length)
+
+    this.doors = this.doorPlan
+      .slice(0, spots.length)
+      .map((door, index) => this.buildDoor(door, spots[index]))
+
+    this.toast('the way on is open again', '#86efac')
   }
 
   buildDoor(advertised, spot) {
