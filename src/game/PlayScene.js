@@ -89,6 +89,24 @@ const PLAYER_SPEED = 320
 // Heavy Vest slowed her down. The cost is that the assist is a slightly larger fraction of
 // a slow player's movement than a fast one's, which is the right way round if either.
 const GAP_ASSIST_STRENGTH = 0.18
+// How far the display outruns what the game draws. A 2x screen presents a 1344x840 canvas
+// across 2688x1680 physical pixels and the compositor invents the difference, which is
+// invisible standing still and turns to mush the moment the camera scrolls - the whole of
+// the "big rooms and corridors are blurry" bug, and the reason nothing about textures or
+// pixel-snapping touched it. So the canvas is built RENDER_SCALE times larger and the
+// camera is zoomed by the same amount: **the world keeps its 1344x840 coordinate space**,
+// every room, hitbox and tuned number stays what it was, and each pixel drawn lands on a
+// real one instead of being stretched over four.
+//
+// Integer, because a fractional zoom resamples everything it draws and hands back some of
+// what this buys. Capped at 2 - past that the fill rate quadruples again for a difference
+// nobody can see. 1 on an ordinary display, where the whole thing is a no-op.
+//
+// Two things follow from the zoom and are easy to forget: `this.scale.width/height` are
+// canvas pixels rather than world units (see viewSize()), and a Text object's glyphs are a
+// texture like any other, so they need rendering at this resolution too (see crispText()).
+export const RENDER_SCALE =
+  typeof window === 'undefined' ? 1 : Math.min(Math.ceil(window.devicePixelRatio || 1), 2)
 // **What is drawn is what collides.** The sprite used to be deliberately wider than the
 // body - a 56 px drawing on a 39 px box - on the reasoning below, which is sound and which
 // this now gives up: a body narrower than the art means the art overlaps whatever stops
@@ -187,7 +205,20 @@ const TILE_TURN_COVER =
   Math.cos(Phaser.Math.DegToRad(TILE_TURN_MAX)) + Math.sin(Phaser.Math.DegToRad(TILE_TURN_MAX))
 
 const EXIT_TEXTURE = 'wood_exit'
-const ROCK_TEXTURE = 'rock_tight'
+const ROCK_TEXTURE = 'rock_org'
+// rock_org.png is the untrimmed export, and its art stops short of the frame: measured,
+// it fills 0.926 of the width and 0.953 of the height, with a hard transparent margin
+// rather than a halo. TILE_TURN_COVER is calibrated for a tile whose art reaches the edge,
+// so at 0.926 the effective cover falls to 1.0834 x 0.926 = 1.003 - the rolled turn then
+// bares the cell's corners and a clump reads as separate stones with floor between them.
+//
+// 1/0.926 = 1.08 restores what rock_tight.png drew; the rest is deliberate overlap, so
+// neighbours meet instead of merely touching.
+//
+// **Visual only.** paintShape puts the body back to the cell with setSize either way, so
+// this cannot change what the player collides with - see the warning down there about
+// updateFromGameObject.
+const ROCK_OVERDRAW = 1.15
 // How much of a tile's width its corner radius is. Two per cent of 1254 px of source is
 // about 25 px, which lands as a bit over a pixel once a cell is 56 - just enough to take
 // the point off a square corner without the tile reading as a pebble.
@@ -198,7 +229,7 @@ const PIT_TEXTURE = 'pit_tight'
 // rounded copies - see roundCorners().
 const ROUNDED = {
   [WALL_TEXTURE]: 'wall_tight_round',
-  [ROCK_TEXTURE]: 'rock_tight_round',
+  [ROCK_TEXTURE]: 'rock_org_round',
   [PIT_TEXTURE]: 'pit_tight_round'
 }
 // The sprite is drawn far larger than the shot it stands for. Its hitbox stays the 10 px
@@ -507,7 +538,7 @@ export class PlayScene extends Phaser.Scene {
       this.load.image(PLAYER_TEXTURE[facing], `sprites/av_${facing}.png`))
     this.load.image(WALL_TEXTURE, 'sprites/wall_tight.png')
     this.load.image(EXIT_TEXTURE, 'sprites/wood_exit.png')
-    this.load.image(ROCK_TEXTURE, 'sprites/rock_tight.png')
+    this.load.image(ROCK_TEXTURE, 'sprites/rock_org.png')
     this.load.image(PIT_TEXTURE, 'sprites/pit_tight.png')
   }
 
@@ -577,8 +608,26 @@ export class PlayScene extends Phaser.Scene {
   // position to settle on, and that position is centred. An axis where the room is at
   // least as big as the screen is untouched and scrolls as it always did - which is every
   // axis of every rectangular and big room, so none of them move.
+  // The viewport in **world units**. `this.scale.width/height` are canvas pixels, which
+  // RENDER_SCALE times overstates the world the camera actually shows - so anything laying
+  // out against the edge of the screen has to come through here rather than off the canvas.
+  // Text at the display's real resolution. A zoomed camera scales a Text object's texture
+  // like any other sprite, so glyphs rasterised at 1x would come out softer than they were
+  // before the zoom existed. Phaser forces resolution to 1 when it is left at 0 and has no
+  // game-wide setting for it, so every text object in the scene is built through here.
+  crispText(x, y, message, style) {
+    return this.add.text(x, y, message, { ...style, resolution: RENDER_SCALE })
+  }
+
+  viewSize() {
+    return {
+      width: this.scale.width / RENDER_SCALE,
+      height: this.scale.height / RENDER_SCALE
+    }
+  }
+
   cameraBoundsFor(width, height) {
-    const view = { width: this.scale.width, height: this.scale.height }
+    const view = this.viewSize()
 
     return [
       Math.min(0, (width - view.width) / 2),
@@ -704,6 +753,11 @@ export class PlayScene extends Phaser.Scene {
     // missing-texture placeholder.
     Object.entries(ROUNDED).forEach(([texture, rounded]) =>
       this.roundCorners(texture, rounded, TILE_CORNER_FRACTION))
+
+
+    // Pays for the larger canvas: RENDER_SCALE times the pixels, zoomed RENDER_SCALE
+    // times, so the visible world is the same 1344x840 it has always been.
+    this.cameras.main.setZoom(RENDER_SCALE)
 
     // A shaped room is measured by its mask rather than by the canvas, so the world can
     // be larger than what is on screen. For a rectangle the two are the same size and
@@ -1005,12 +1059,14 @@ export class PlayScene extends Phaser.Scene {
     const group = asRock ? this.rocks : this.pits
     const texture = ROUNDED[asRock ? ROCK_TEXTURE : PIT_TEXTURE]
 
+    const drawn = CELL * TILE_TURN_COVER * (asRock ? ROCK_OVERDRAW : 1)
+
     shape.forEach(([row, col]) => {
       const tile = this.tiledSurface(
         col * CELL + CELL / 2,
         row * CELL + CELL / 2,
-        CELL * TILE_TURN_COVER,
-        CELL * TILE_TURN_COVER,
+        drawn,
+        drawn,
         texture
       )
 
@@ -1231,12 +1287,14 @@ export class PlayScene extends Phaser.Scene {
       const angle = Phaser.Math.Angle.Between(view.centerX, view.centerY, enemy.x, enemy.y)
       const offset = edgePoint(
         angle,
-        this.scale.width / 2 - PING_MARGIN,
-        this.scale.height / 2 - PING_MARGIN
+        view.width / 2 - PING_MARGIN,
+        view.height / 2 - PING_MARGIN
       )
 
+      // Pinned with setScrollFactor(0), so this is screen space measured in world units -
+      // and worldView's size is exactly that, the camera's extent after the zoom.
       this.pingAt(index)
-        .setPosition(this.scale.width / 2 + offset.x, this.scale.height / 2 + offset.y)
+        .setPosition(view.width / 2 + offset.x, view.height / 2 + offset.y)
         .setRotation(angle)
         .setVisible(true)
     })
@@ -1821,8 +1879,7 @@ export class PlayScene extends Phaser.Scene {
         .setOrigin(0, 0)
     )
 
-    this.hpLabel = this.add
-      .text(left + innerWidth + BAR_PADDING * 2 + 12, top + BAR_PADDING, '', {
+    this.hpLabel = this.crispText(left + innerWidth + BAR_PADDING * 2 + 12, top + BAR_PADDING, '', {
         fontFamily: 'monospace',
         fontSize: '18px',
         color: '#f87171'
@@ -2058,7 +2115,7 @@ export class PlayScene extends Phaser.Scene {
     const { width } = this.scale
     const left = SHOP_SHELF_MARGIN
     const span = width - SHOP_SHELF_MARGIN * 2
-    const y = this.scale.height * SHOP_SHELF_Y
+    const y = this.viewSize().height * SHOP_SHELF_Y
     const step = span / count
 
     return Array.from(
@@ -2092,8 +2149,7 @@ export class PlayScene extends Phaser.Scene {
     // is already saying which item it is - see shelfLabelFor.
     const label = shelfLabelFor(entry)
 
-    pickup.spec.priceTag = this.add
-      .text(spot.x, spot.y + PICKUP_SIZE, label ? `${label}\n${price} EXP` : `${price} EXP`, {
+    pickup.spec.priceTag = this.crispText(spot.x, spot.y + PICKUP_SIZE, label ? `${label}\n${price} EXP` : `${price} EXP`, {
         fontFamily: 'monospace',
         fontSize: '13px',
         color: '#e2e8f0',
@@ -2437,8 +2493,7 @@ export class PlayScene extends Phaser.Scene {
     pad.body.setAllowGravity(false)
     pad.body.setImmovable(true)
 
-    const text = this.add
-      .text(spot.x, spot.y + EXIT_SIZE / 2 + 4, `${label}
+    const text = this.crispText(spot.x, spot.y + EXIT_SIZE / 2 + 4, `${label}
 ${advertised.tier}`, {
         fontFamily: 'monospace',
         fontSize: '13px',
@@ -2701,8 +2756,7 @@ ${advertised.tier}`, {
 
     // Screen-centred and screen-pinned, not room-centred: a big room scrolls, and the
     // word belongs in front of the player's eyes rather than somewhere in the level.
-    const word = this.add
-      .text(width / 2, height / 2 - 18, 'AMBUSH', {
+    const word = this.crispText(width / 2, height / 2 - 18, 'AMBUSH', {
         fontFamily: 'monospace',
         fontSize: AMBUSH_TEXT_SIZE,
         color: '#f87171',
@@ -2714,8 +2768,7 @@ ${advertised.tier}`, {
 
     // Wrapped, because the pool runs to 96 characters and a single line of it would
     // overrun a 1344 px room and be cut off at both ends.
-    const said = this.add
-      .text(width / 2, height / 2 + 30, line, {
+    const said = this.crispText(width / 2, height / 2 + 30, line, {
         fontFamily: 'monospace',
         fontSize: AMBUSH_SUBTEXT_SIZE,
         color: '#fca5a5',
@@ -2850,8 +2903,7 @@ ${advertised.tier}`, {
 
     const { width, height } = this.scale
 
-    this.noticeText = this.add
-      .text(width / 2, height - NOTICE_OFFSET, message, {
+    this.noticeText = this.crispText(width / 2, height - NOTICE_OFFSET, message, {
         fontFamily: 'monospace',
         fontSize: '20px',
         color
@@ -3196,8 +3248,7 @@ ${advertised.tier}`, {
     const rowY = height - WALL_THICKNESS + 16 + SLOT_SIZE / 2
 
     const label = (x, y, text, origin) =>
-      this.add
-        .text(x, y, text, { fontFamily: 'monospace', fontSize: '12px', color: '#cbd5e1' })
+      this.crispText(x, y, text, { fontFamily: 'monospace', fontSize: '12px', color: '#cbd5e1' })
         .setOrigin(origin, 0.5)
         .setDepth(HUD_DEPTH)
         .setScrollFactor(0)
@@ -3232,8 +3283,7 @@ ${advertised.tier}`, {
 
     // EXP rides the middle of the top band: clear of the hearts on the left and the
     // status text on the right.
-    this.hudExpText = this.add
-      .text(width / 2, WALL_THICKNESS / 2, '', {
+    this.hudExpText = this.crispText(width / 2, WALL_THICKNESS / 2, '', {
         fontFamily: 'monospace',
         fontSize: '14px',
         color: '#fbbf24'
@@ -3243,8 +3293,7 @@ ${advertised.tier}`, {
       .setScrollFactor(0)
 
     // Status text goes in the top band beside the hearts, where there is room to spare.
-    this.hudSetText = this.add
-      .text(width - HUD_EDGE_MARGIN, WALL_THICKNESS / 2, '', {
+    this.hudSetText = this.crispText(width - HUD_EDGE_MARGIN, WALL_THICKNESS / 2, '', {
         fontFamily: 'monospace',
         fontSize: '14px',
         color: '#a3e635'
@@ -3281,8 +3330,7 @@ ${advertised.tier}`, {
         .setScrollFactor(0)
       veil.setScale(1, 0)
 
-      const text = this.add
-        .text(x, centreY - 5, '.', {
+      const text = this.crispText(x, centreY - 5, '.', {
           fontFamily: 'monospace',
           fontSize: '17px',
           color: '#64748b'
@@ -3291,8 +3339,7 @@ ${advertised.tier}`, {
         .setDepth(HUD_DEPTH + 2)
         .setScrollFactor(0)
 
-      const timer = this.add
-        .text(x, centreY + SLOT_SIZE / 2 - 3, '', {
+      const timer = this.crispText(x, centreY + SLOT_SIZE / 2 - 3, '', {
           fontFamily: 'monospace',
           fontSize: '10px',
           color: '#e2e8f0'
@@ -3303,8 +3350,7 @@ ${advertised.tier}`, {
 
       // the key that fires this slot, on its own line above the boxes
       if (withKeyHints) {
-        this.add
-          .text(x, keyHintY, String(index + 1), {
+        this.crispText(x, keyHintY, String(index + 1), {
             fontFamily: 'monospace',
             fontSize: '11px',
             color: '#94a3b8'
@@ -3437,8 +3483,7 @@ ${advertised.tier}`, {
 
     rows.forEach((row) => {
       this.swap.objects.push(
-        this.add
-          .text(row.left ? listLeft : width / 2, y, row.text, {
+        this.crispText(row.left ? listLeft : width / 2, y, row.text, {
             fontFamily: 'monospace',
             fontSize: row.size + 'px',
             color: row.color
@@ -3565,8 +3610,7 @@ ${advertised.tier}`, {
     const listLeft = width / 2 - PAUSE_PANEL_WIDTH / 2 + 52
 
     rows.forEach((row) => {
-      const text = this.add
-        .text(row.left ? listLeft : width / 2, y, row.text, {
+      const text = this.crispText(row.left ? listLeft : width / 2, y, row.text, {
           fontFamily: 'monospace',
           fontSize: row.size + 'px',
           color: row.color
@@ -3609,8 +3653,7 @@ ${advertised.tier}`, {
       }
 
       this.pauseMenu.objects.push(
-        this.add
-          .text(x + PAUSE_ICON_SIZE / 2 + 2, y + 6, `x${count}`, {
+        this.crispText(x + PAUSE_ICON_SIZE / 2 + 2, y + 6, `x${count}`, {
             fontFamily: 'monospace',
             fontSize: '13px',
             color: '#e2e8f0'
@@ -3729,8 +3772,9 @@ ${advertised.tier}`, {
       this.toastText.destroy()
     }
 
-    this.toastText = this.add
-      .text(this.scale.width / 2, this.scale.height - 70, message, {
+    const view = this.viewSize()
+
+    this.toastText = this.crispText(view.width / 2, view.height - 70, message, {
         fontFamily: 'monospace',
         fontSize: '20px',
         color
@@ -3756,8 +3800,7 @@ ${advertised.tier}`, {
 
     const { width, height } = this.scale
 
-    this.add
-      .text(width / 2, height / 2 - 20, 'GAME OVER', {
+    this.crispText(width / 2, height / 2 - 20, 'GAME OVER', {
         fontFamily: 'monospace',
         fontSize: '64px',
         color: '#f87171'
@@ -3765,8 +3808,7 @@ ${advertised.tier}`, {
       .setOrigin(0.5)
       .setScrollFactor(0)
 
-    this.add
-      .text(width / 2, height / 2 + 40, 'press R to try again', {
+    this.crispText(width / 2, height / 2 + 40, 'press R to try again', {
         fontFamily: 'monospace',
         fontSize: '22px',
         color: '#94a3b8'
