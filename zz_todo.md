@@ -163,6 +163,32 @@ is not used, so it does not look wired.
 
 ---
 
+### A walk cycle for the player
+
+The player has **four static directional poses** - `av_up`, `av_down`, `av_left`,
+`av_right` - and turns to face the direction she is aiming. That is the whole of it: one
+drawing per direction, swapped on a turn, no animation.
+
+**A walk cycle is wanted and is waiting on frames**, not on code. Phaser's animation system
+needs no new pipeline: `this.anims.create()` over a set of texture keys, played when the
+velocity is non-zero and stopped when it is not, replacing the single `setTexture()` call in
+`faceAim()`. What does not exist is the art - at least a two-frame step per direction, and
+more usefully four, which is 16 images against today's 4.
+
+**Two things to settle when the frames arrive:**
+
+- **A walk cycle keys off movement; the pose keys off aim.** Those are different inputs in
+  this game - WASD moves, the arrows aim - so a walking animation cannot simply follow the
+  facing. Walking left while shooting right is a legal and common thing to do here.
+- **Payload.** The four static poses are 3.6 MB, and `public/sprites/` is already 17.5 MB
+  across 14 files. Sixteen walk frames at the current export size would roughly triple
+  that. Worth a texture atlas, or a smaller export, before the frame count grows.
+
+**Where:** `faceAim()` and the `PLAYER_TEXTURE` / `PLAYER_TEXTURE_CUT` maps in
+`PlayScene.js`.
+
+---
+
 ### Wall, rock and pit theming pools
 
 Room art is one fixed set: `wood_wall`, `wood_exit`, `rock`, `pit`. The `wood_` prefix is
