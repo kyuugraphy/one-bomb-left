@@ -1,15 +1,12 @@
 import Phaser from 'phaser'
-import { PlayScene, RENDER_SCALE } from './game/PlayScene.js'
+import { PlayScene } from './game/PlayScene.js'
 
 // The entrance room is 1344x840 - 24x15 cells of the 56 px obstacle grid.
 new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'app',
-  // The room is 1344x840 in world units and always will be; RENDER_SCALE only decides how
-  // many real pixels that is drawn with. The camera is zoomed to match in PlayScene, so
-  // nothing downstream sees a different world. See RENDER_SCALE for why.
-  width: 1344 * RENDER_SCALE,
-  height: 840 * RENDER_SCALE,
+  width: 1344,
+  height: 840,
   backgroundColor: '#16171d',
   scale: {
     mode: Phaser.Scale.FIT,
